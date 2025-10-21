@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-kratos/kratos/v2/log"
 	"github.com/stretchr/testify/require"
@@ -31,14 +32,13 @@ func TestLoggerWritesExpectedJSON(t *testing.T) {
 	logger, buf, _, err := NewTestLogger(
 		WithService("catalog"),
 		WithVersion("2025.10.21"),
-		WithComponentTypes("catalog"),
 	)
 	require.NoError(t, err)
 
 	err = logger.Log(
 		log.LevelInfo,
 		log.DefaultMessageKey, "accepted",
-		"component", "catalog",
+		"caller", "service/handler.go:12",
 		"payload", map[string]any{"video_id": "vid-1"},
 	)
 	require.NoError(t, err)
@@ -52,30 +52,10 @@ func TestLoggerWritesExpectedJSON(t *testing.T) {
 	require.Equal(t, "2025.10.21", serviceCtx["version"])
 
 	labels := entry["labels"].(map[string]any)
-	require.Equal(t, "catalog", labels["component"])
+	require.Equal(t, "service/handler.go:12", labels["caller"])
 
 	payload := entry["jsonPayload"].(map[string]any)
 	require.Equal(t, "vid-1", payload["payload"].(map[string]any)["video_id"])
-}
-
-func TestInvalidComponentRecordsStatus(t *testing.T) {
-	logger, buf, _, err := NewTestLogger(
-		WithService("svc"),
-		WithVersion("v1"),
-		WithComponentTypes("allowed"),
-	)
-	require.NoError(t, err)
-
-	err = logger.Log(
-		log.LevelInfo,
-		log.DefaultMessageKey, "msg",
-		"component", "denied",
-	)
-	require.NoError(t, err)
-
-	entry := decodeEntry(t, buf.String())
-	payload := entry["jsonPayload"].(map[string]any)
-	require.Equal(t, "invalid:denied", payload["component_status"])
 }
 
 func TestPayloadTypeError(t *testing.T) {
@@ -98,12 +78,12 @@ func TestWithTraceAndHelper(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := StubTraceContext(context.Background(), "1234abcd", "0011")
-	helper := NewHelper(WithTrace(ctx, "proj", logger)).WithComponent("component")
+	helper := NewHelper(WithTrace(ctx, "proj", logger)).WithCaller("component")
 	helper.InfoWithPayload("done", map[string]any{"status": "ok"})
 
 	entry := decodeEntry(t, buf.String())
 	require.Contains(t, entry["trace"], "projects/proj/traces/")
-	require.Equal(t, "component", entry["labels"].(map[string]any)["component"])
+	require.Equal(t, "component", entry["labels"].(map[string]any)["caller"])
 }
 
 func TestLoggerRejectsUnsupportedKey(t *testing.T) {
@@ -162,7 +142,7 @@ func TestHelperWithPayload(t *testing.T) {
 	logger, buf, _, err := NewTestLogger(WithService("svc"), WithVersion("v1"))
 	require.NoError(t, err)
 
-	helper := NewHelper(logger).WithComponent("catalog").WithPayload(map[string]any{"k": "v"})
+	helper := NewHelper(logger).WithCaller("catalog").WithPayload(map[string]any{"k": "v"})
 	helper.InfoWithPayload("hello", map[string]any{"id": 1})
 
 	entry := decodeEntry(t, buf.String())
@@ -170,7 +150,24 @@ func TestHelperWithPayload(t *testing.T) {
 	inner := payload["payload"].(map[string]any)
 	require.Equal(t, float64(1), inner["id"])
 	labels := entry["labels"].(map[string]any)
-	require.Equal(t, "catalog", labels["component"])
+	require.Equal(t, "catalog", labels["caller"])
+}
+
+func TestPayloadMerge(t *testing.T) {
+	logger, buf, _, err := NewTestLogger(WithService("svc"), WithVersion("v1"))
+	require.NoError(t, err)
+
+	logger = WithPayload(logger, map[string]any{"a": 1})
+	logger = WithStatus(logger, "ok")
+	logger = WithPayload(logger, map[string]any{"b": 2})
+
+	require.NoError(t, logger.Log(log.LevelInfo, log.DefaultMessageKey, "msg"))
+
+	entry := decodeEntry(t, buf.String())
+	payload := entry["jsonPayload"].(map[string]any)["payload"].(map[string]any)
+	require.Equal(t, float64(1), payload["a"])
+	require.Equal(t, float64(2), payload["b"])
+	require.Equal(t, "ok", payload["status"])
 }
 
 func TestConcurrentWrites(t *testing.T) {
@@ -191,6 +188,67 @@ func TestConcurrentWrites(t *testing.T) {
 
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	require.Len(t, lines, n)
+}
+
+func TestWithHTTPRequest(t *testing.T) {
+	logger, buf, _, err := NewTestLogger(WithService("svc"), WithVersion("v1"))
+	require.NoError(t, err)
+
+	req, _ := http.NewRequest(http.MethodGet, "https://example.com/foo?bar=baz", nil)
+	req.Header.Set("User-Agent", "test-agent")
+	req.RemoteAddr = "127.0.0.1:12345"
+
+	logger = WithHTTPRequest(logger, req, 200, 150*time.Millisecond)
+	require.NoError(t, logger.Log(log.LevelInfo, log.DefaultMessageKey, "http req"))
+
+	entry := decodeEntry(t, buf.String())
+	httpReq := entry["httpRequest"].(map[string]any)
+	require.Equal(t, "GET", httpReq["requestMethod"])
+	require.Equal(t, "https://example.com/foo?bar=baz", httpReq["requestUrl"])
+	require.Equal(t, "0.150s", httpReq["latency"])
+	require.Equal(t, "test-agent", httpReq["userAgent"])
+	require.Equal(t, "127.0.0.1", httpReq["remoteIp"])
+}
+
+func TestLabelsHelpers(t *testing.T) {
+	logger, buf, _, err := NewTestLogger(WithService("svc"), WithVersion("v1"))
+	require.NoError(t, err)
+
+	logger = WithRequestID(logger, "req-123")
+	logger = WithUser(logger, "user-456")
+	logger = WithLabels(logger, map[string]string{"team": "growth"})
+	require.NoError(t, logger.Log(log.LevelInfo, log.DefaultMessageKey, "msg"))
+
+	entry := decodeEntry(t, buf.String())
+	labels := entry["labels"].(map[string]any)
+	require.Equal(t, "req-123", labels["request_id"])
+	require.Equal(t, "user-456", labels["user_id"])
+	require.Equal(t, "growth", labels["team"])
+}
+
+func TestSourceLocationEnabled(t *testing.T) {
+	logger, buf, _, err := NewTestLogger(WithService("svc"), WithVersion("v1"), EnableSourceLocation())
+	require.NoError(t, err)
+
+	require.NoError(t, logger.Log(log.LevelInfo, log.DefaultMessageKey, "msg"))
+	entry := decodeEntry(t, buf.String())
+	src, ok := entry["sourceLocation"].(map[string]any)
+	if !ok {
+		t.Skip("sourceLocation not captured on this runtime")
+	}
+	require.Contains(t, src["file"], "logger_test.go")
+}
+
+func TestWithErrorHelper(t *testing.T) {
+	logger, buf, _, err := NewTestLogger(WithService("svc"), WithVersion("v1"))
+	require.NoError(t, err)
+
+	logger = WithError(logger, fmt.Errorf("boom"))
+	require.NoError(t, logger.Log(log.LevelError, log.DefaultMessageKey, "failed"))
+
+	entry := decodeEntry(t, buf.String())
+	payload := entry["jsonPayload"].(map[string]any)
+	require.Equal(t, "boom", payload["error"])
 }
 
 func decodeEntry(t *testing.T, raw string) map[string]any {

@@ -1,102 +1,203 @@
-# pkg/gclog —— Kratos × Google Cloud Logging 封装指引
+# gclog – Kratos Logger Aligned with Google Cloud Logging
 
-本文档总结在 `pkg/gclog` 下实现 Google Cloud Logging 适配器的最佳实践，目标是：
+`gclog` 提供一套与 **Google Cloud Logging** 模型完全对齐的日志适配器，同时继续复用 Kratos 的 `log.Logger` 抽象。使用它可以：
 
-1. **继续沿用 Kratos 统一的 `log.Logger` 接口**，业务仍可使用 `log.With`、`log.NewHelper` 等常规入口。
-2. **保证 Cloud Logging 所需核心字段**（`time`、`level`、`msg`、`service`、`version`、`trace_id`、`span_id`）始终存在且位于约定位置。
-3. **输出 Cloud Logging 兼容的 JSON** 到任意 `io.Writer`（stdout、文件等），既满足 Cloud Run / GKE 采集链路，也兼顾本地调试与文件落盘。
+1. **无侵入切换输出**：业务代码仍然调用 `log.With`、`log.NewHelper`、Kratos logging middleware；底层统一输出 Cloud Logging 兼容的 JSON 或对接未来的 Cloud Logging API。
+2. **保证核心字段完整**：自动填充 `timestamp`、`severity`、`message`、`serviceContext`、`trace`/`spanId`、`labels`、`jsonPayload` 等字段，便于在 Cloud Logging / Error Reporting / Trace 控制台直接检索和聚合。
+3. **封装常用辅助**：提供追加 trace、caller、请求 ID、用户 ID、HTTP 请求摘要等 helper，并附带测试工具 `NewTestLogger`、`StubTraceContext` 等，方便单元测试校验日志内容。
 
 ---
 
-## 设计思路
+## 字段映射
 
-| 目标字段 | 必填 | 来源说明 |
-| -------- | ---- | -------- |
-| `time`   | 是   | 由适配器自动写入，格式 RFC3339Nano / UTC |
-| `level`  | 是   | Kratos `log.Level` → Cloud Logging `Severity` |
-| `msg`    | 是   | `log.DefaultMessageKey`（Kratos Helper 默认键） |
-| `service`| 是   | 初始化时通过 `Options.Service` 指定 |
-| `version`| 是   | 初始化时通过 `Options.Version` 指定 |
-| `component` | 否 | 通过 `Options.ComponentTypes` 注册的枚举值，表示子组件名称 |
-| `instance_id` | 否 | 默认取 `os.Hostname()`，可通过 `Options.InstanceID` 覆盖或 `Options.DisableInstanceID` 关闭 |
-| `trace_id` / `span_id` | 是 | `WithTrace(ctx, kv...)` 或从 OTel `SpanContext` 派生 |
-| `payload` | 否 | 额外业务字段的字典（`map[string]any`），仅包含列表外的自定义键值 |
+| Cloud Logging 字段 | 是否必填 | 说明/来源 |
+|--------------------|----------|-----------|
+| `timestamp`        | ✅       | `time.Now().UTC().Format(time.RFC3339Nano)` |
+| `severity`         | ✅       | Kratos `log.Level` 映射为 `DEBUG/INFO/WARNING/ERROR/CRITICAL` 等 |
+| `message`          | ✅       | Kratos 默认消息键 `log.DefaultMessageKey` |
+| `serviceContext`   | ✅       | `Options.Service`、`Options.Version`，可扩展 `environment` |
+| `trace`            | 可选    | 若设置 `Options.ProjectID` + OTel SpanContext，则输出 `projects/<project>/traces/<trace-id>` |
+| `spanId`           | 可选    | 来自 OTel SpanContext |
+| `labels`           | 可选    | `caller`、`instance_id`、`request_id`、`user_id`、`env` 等维度信息 |
+| `httpRequest`      | 可选    | HTTP 摘要（方法、URL、状态、时延、UA 等），由 helper/middleware 填充 |
+| `sourceLocation`   | 可选    | 源码位置（文件/行号/函数），可通过 `EnableSourceLocation` 自动收集 |
+| `jsonPayload`      | 可选    | `payload` 字段承载业务自定义数据 |
 
-实现时建议拆分为三类组件（需引入 `fmt`、`os`、`sync` 等标准库，并依赖 `github.com/go-kratos/kratos/v2/log`）：
+---
 
-1. **构造层**  
-   - `Options`：包含 `Service`、`Version`（必填）以及 `ComponentTypes map[string]struct{}`、`InstanceID`、`DisableInstanceID`、`Writer` 等可选项，统一在 `ValidateOptions` 中做严格校验；`Writer` 支持任意 `io.Writer`（stdout、文件、ring buffer 等）。  
-   - `NewLogger(opts Options) (log.Logger, FlushFn, error)`：根据 `Options` 返回实现 Kratos 接口的 Logger，`FlushFn` 用于未来切换 Cloud Logging API 时执行 `logger.Flush()`。内部只接受 `log.DefaultMessageKey`、`trace_id`、`span_id`、`component`、`payload` 键，并将 `service`/`version` 写入 `ServiceContext`，`component`、`instance_id` 写入 `Labels`。  
-   - Option Builder：如 `WithComponentTypes("gateway","catalog")`、`WithInstanceID(id)`、`DisableInstanceID()`、`WithWriter(io.Writer)`，避免外部重复拼 map。
+## 模块结构与 API
 
-2. **上下文与 Helper**  
-   - `AppendTrace(ctx context.Context, projectID string, kvs []interface{}) []interface{}`：从 OTel `SpanContext` 生成符合 Cloud Logging 要求的 `projects/<project>/traces/<trace>`，用于 `log.With`。  
-   - `WithTrace(ctx context.Context, projectID string, base log.Logger) log.Logger`：封装 `AppendTrace` + `log.WithContext`，方便直接得到带 trace 的 logger。  
-   - `type Helper struct{ *log.Helper }`：在 `Helper` 上扩展 `InfoWithPayload(msg string, payload map[string]any, kvs ...interface{})`、`WithComponent(name string) *Helper` 等方法，保证所有扩展字段自动走 `payload` 并校验组件枚举。  
-   - `RequestLogger(ctx, base log.Logger, component string, payload map[string]any, projectID string) (*Helper, error)`：组合常见模式（trace + component + payload），供 HTTP/gRPC middleware 一行注入。
-
-3. **字段辅助**  
-   - `WithComponent(logger log.Logger, component string) (log.Logger, error)`：校验枚举后附加 `component`。  
-   - `WithPayload(logger log.Logger, payload map[string]any) (log.Logger, error)`：统一将自定义字段落在 `payload` key，下游 JSON 结构保持稳定。  
-   - `SeverityFromHTTP(status int) log.Level`（可选）：把 HTTP 状态码映射到 Kratos 日志级别，便于中间件统一处理。  
-   - **测试 Helper**：例如 `NewTestLogger()` 返回基于 `bytes.Buffer` 的 logger，配合断言函数 `AssertEntry(t, buf, want)` 确认输出字段；或提供 `StubTraceContext(traceID, spanID)` 生成固定 trace/span，方便单元测试不依赖真实 OTel。  
-
-配合上述 API，业务侧无需关心 JSON 结构细节，只需：
+### 1. 构造层
 
 ```go
 logger, flush, err := gclog.NewLogger(
     gclog.WithService("catalog-service"),
     gclog.WithVersion("2025.10.21"),
-    gclog.WithComponentTypes("gateway", "catalog"),
+    gclog.WithProjectID("my-gcp-project"),
+    gclog.WithEnvironment("prod"),
+    gclog.WithInstanceID("instance-001"),
+    gclog.WithStaticLabels(map[string]string{"team": "growth"}),
+    gclog.EnableSourceLocation(),
 )
-if err != nil { log.Fatalf("init logger: %v", err) }
+if err != nil {
+    panic(err)
+}
 defer flush(context.Background())
-
-ctxLogger := gclog.WithTrace(ctx, projectID, logger)
-helper := gclog.NewHelper(ctxLogger).WithComponent("catalog")
-helper.InfoWithPayload("video accepted", map[string]any{"video_id": id})
 ```
 
-### Trace/Span 注入
+**Options & Option Builders**
+- `WithService(string)` / `WithVersion(string)`：必填字段，映射到 `serviceContext`。
+- `WithProjectID(string)`：用于构建 Cloud Logging `trace` 字段；若部署在 GCP，务必提供项目 ID 才能在 Cloud Trace 控制台串联完整链路。
+- `WithEnvironment(string)`：写入 `serviceContext.environment` 或 `labels.env`，便于跨环境筛选。
+- `WithStaticLabels(map[string]string)`：预置自定义标签，如 `team`、`region`。
+- `WithInstanceID(string)` / `DisableInstanceID()`：控制 `labels.instance_id`。
+- `WithWriter(io.Writer)`：输出目标（默认 stdout，可换文件/缓冲区）。
+- `EnableSourceLocation()`：基于 `runtime.Caller` 自动填充 `sourceLocation`。
 
-提供一个辅助函数，把 OTel `SpanContext` 映射到 Cloud Logging 需要的格式（`projects/<project>/traces/<trace-id>`）：
+### 2. 上下文与 Helper
+
+| Helper                               | 说明 |
+| Helper | 说明 |
+| --- | --- |
+| `AppendTrace(ctx, projectID, kvs)` | 将 OTel SpanContext 转换为 Cloud Logging `trace`/`spanId` 字段 |
+| `AppendLabels(kvs, map[string]string)` | 在 kv 列表上追加 labels，便于 `logging.WithFields` 使用 |
+| `WithTrace(ctx, projectID, logger)` | 创建带 trace 元数据的新 logger，并保留原 context |
+| `WithCaller(logger, caller)` | 追加 `caller` 标签（如 `pkg.Func:line`） |
+| `WithLabels(logger, map[string]string)` | 批量追加标签（team、region 等） |
+| `WithRequestID` / `WithUser` | 快速写入 `request_id`、`user_id` 标签 |
+| `WithPayload(logger, payload)` | 将业务对象放入 `jsonPayload.payload` |
+| `WithStatus(logger, status)` | 将业务状态写入 payload（与 `WithPayload` 可叠加） |
+| `WithError(logger, error)` | 将错误信息结构化输出到 `jsonPayload.error` |
+| `WithHTTPRequest(logger, req, status, latency)` | 写入 Cloud Logging `httpRequest` 结构（方法、URL、状态、耗时、UA 等） |
+| `SeverityFromHTTP(status)` | HTTP 状态码与 Kratos 日志级别映射 |
+| `type Helper struct{ *log.Helper }` | 扩展 Kratos Helper：`InfoWithPayload`、`WithCaller`、`WithPayload` 等 |
+| `RequestLogger(ctx, base, projectID, caller, labels, payload)` | 常见组合（trace + caller + labels + payload），可直接用于 middleware |
+
+### 3. 测试工具
+
+- `NewTestLogger(opts ...Option) (log.Logger, *bytes.Buffer, FlushFn, error)`：返回基于内存缓冲的 logger，配合单测断言输出。
+- `StubTraceContext(ctx, traceID, spanID)`：生成固定 trace/span，避免依赖真实 OTel tracer。
+- `DecodeEntries(buffer)`（建议扩展）：将多条日志解析为 `[]Entry`，便于批量断言。
+
+---
+
+## 中间件接入示例
+
+### gRPC Server
+```go
+srv := grpc.NewServer(
+    grpc.Middleware(
+        recovery.Recovery(),
+        tracing.Server(tracing.WithTracerProvider(tp)),
+        logging.Server(
+            logging.WithLogger(logger),
+            logging.WithFields(func(ctx context.Context) map[string]interface{} {
+                fields := gclog.AppendTrace(ctx, projectID, nil)
+                if rid := requestid.FromContext(ctx); rid != "" {
+                    fields = gclog.AppendLabels(fields, map[string]string{"request_id": rid})
+                }
+                return gclog.LabelsFromKVs(fields)
+            }),
+        ),
+    ),
+)
+```
+
+### gRPC Client
+```go
+conn, err := grpc.DialInsecure(
+    ctx,
+    grpc.WithEndpoint("127.0.0.1:9000"),
+    grpc.WithMiddleware(
+        logging.Client(
+            logging.WithLogger(logger),
+            logging.WithFields(func(ctx context.Context) map[string]interface{} {
+                return gclog.LabelsFromKVs(gclog.AppendTrace(ctx, projectID, nil))
+            }),
+        ),
+    ),
+)
+```
+
+### HTTP Server/Client
+HTTP 中可配合 `WithHTTPRequest` 写入 Cloud Logging 的 `httpRequest`，并仅记录必要摘要，避免采集请求体。
 
 ```go
-func AppendTrace(ctx context.Context, project string, kvs []interface{}) []interface{} {
-    sc := trace.SpanContextFromContext(ctx)
-    if sc.HasTraceID() {
-        kvs = append(kvs, "trace_id", fmt.Sprintf("projects/%s/traces/%s", project, sc.TraceID()))
+func httpLoggingFields(ctx context.Context) map[string]interface{} {
+    fields := gclog.AppendTrace(ctx, projectID, nil)
+    if info, ok := transport.FromServerContext(ctx).(*http.Context); ok {
+        fields = append(fields,
+            "caller", info.Route(),
+        )
     }
-    if sc.HasSpanID() {
-        kvs = append(kvs, "span_id", sc.SpanID().String())
-    }
-    return kvs
+    return gclog.LabelsFromKVs(fields)
 }
 ```
 
-在 Handler 中可配合 `log.WithContext(ctx, logger)` 与 `log.NewHelper` 调用：
+---
 
-```go
-ctxLogger := log.With(logger, gclog.AppendTrace(ctx, projectID, nil)...)
-helper := log.NewHelper(ctxLogger)
-helper.Infow("request completed", "route", "/api/v1/videos")
+## 输出示例
+
+```json
+{
+  "timestamp": "2025-10-21T14:52:30.123456Z",
+  "severity": "INFO",
+  "message": "video accepted",
+  "serviceContext": {
+    "service": "catalog-service",
+    "version": "2025.10.21",
+    "environment": "prod"
+  },
+  "trace": "projects/my-project/traces/3d8f09bd2cd9d4f7",
+  "spanId": "a1b2c3d4e5f6g7h8",
+  "sourceLocation": {
+    "file": "internal/service/video.go",
+    "line": 82,
+    "function": "catalog.VideoService.Accept"
+  },
+  "labels": {
+    "caller": "catalog.VideoService.Accept",
+    "instance_id": "instance-001",
+    "request_id": "req-123",
+    "user_id": "user-456",
+    "team": "growth"
+  },
+  "httpRequest": {
+    "requestMethod": "POST",
+    "requestUrl": "https://api.example.com/v1/catalog/videos",
+    "status": 200,
+    "remoteIp": "10.1.2.3",
+    "latency": "0.120s",
+    "userAgent": "chrome/127.0.0.1",
+    "protocol": "HTTP/2"
+  },
+  "jsonPayload": {
+    "payload": {
+      "video_id": "vid-01XYZ",
+      "status": "accepted"
+    }
+  }
+}
 ```
 
-### 快速开始与测试
+---
+
+## 快速开始
 
 ```bash
-cd pkg/gclog
+cd lingo-utils/gclog
 go test ./...
 ```
 
-在其他模块中引用：
+在其它模块引用：
 
 ```go
-import "github.com/bionicotaku/lingo-utils-gclog"
+import gclog "github.com/bionicotaku/lingo-utils/gclog"
 
 logger, flush, err := gclog.NewLogger(
     gclog.WithService("catalog"),
     gclog.WithVersion("2025.10.21"),
+    gclog.WithEnvironment("prod-cn"),
 )
 if err != nil {
     panic(err)
@@ -106,26 +207,28 @@ defer flush(context.Background())
 log.NewHelper(logger).Info("booted")
 ```
 
-### 并发与生命周期
+---
 
-- `Logger` 内部写入已通过互斥锁串行化；若追加压缩或网络写入，可在外层包装新的 `io.Writer`。
-- 若未来改用 `cloud.google.com/go/logging.Client`，记得在应用退出时调用 `logger.Flush()`，并通过 `Client.OnError` 记录上报失败。
+## 实施与验证建议
+
+1. **字段检查**：确保 `service`、`version`、`message`、`trace`（若启用）在输出中存在；labels/HTTP 请求字段符合 Cloud Logging 格式。
+2. **中间件升级**：把 gRPC / HTTP Server & Client 的 logging middleware 全部替换为 `logging.Server(logging.WithLogger(logger), logging.WithFields(...))`，并在 `fields` 回调里调用 `gclog.AppendTrace`、`gclog.AppendLabels` 等 helper，将 `request_id`、`user_id` 等维度统一放入 labels。  
+3. **trace 必要性**：只有在上下游链路都启用了 OTel tracing 时才输出 `trace`/`spanId`；否则留空即可。
+4. **敏感数据处理**：可结合 Kratos `log.NewFilter` 或自定义 helper 对 payload 中的隐私字段做脱敏。
+5. **测试**：使用 `NewTestLogger` + `StubTraceContext` 构造单测，确保日志 JSON 符合预期。
+6. **部署验证**：在 Cloud Logging 控制台确认日志能按 `serviceContext.service`、`serviceContext.version`、`labels` 等维度筛选；如启用了 Error Reporting，检查是否按版本自动聚合。
+
+> **关于 Operation / Resource**  
+> gclog 目前专注于应用日志的核心字段。若需要将多条日志归属同一长操作（`operation.id/first/last`）或显式指定 GCP 资源类型（`resource.type`），可以在后续迭代中通过扩展 Options 与 logEntry 结构实现；Cloud Logging API 允许直接设定这些字段。
 
 ---
 
-## 最佳实践清单
+## TODO
 
-1. **强制校验必填字段**：`service`、`version` 在初始化时校验；`msg` 无论如何保证非空；`trace_id`、`span_id` 自动兜底。  
-2. **统一结构化命名**：建议所有字段使用下划线小写（`user_id`、`error_kind`）以便 Cloud Logging 查询。  
-3. **区分环境 Writer**：
-   - 生产：默认写往 `os.Stdout`（Cloud Run / GKE 自动采集）。  
-   - 本地调试：可替换为 `bytes.Buffer`、`io.MultiWriter` 等，以满足测试或文件记录需求。  
-4. **配合 Kratos Filter**：必要时使用 `log.NewFilter` 做采样 / 级别限制，或拦截敏感字段。  
-5. **自定义字段统一放入 `payload`**：除表格内字段外不允许额外键名，业务扩展统一通过 `payload`（`map[string]any`）传递，未遵循将直接报错，避免日志结构漂移。  
-6. **组件枚举管理**：通过 `Options.ComponentTypes` 提前注册合法值（例如 `gateway`、`catalog`），日志侧严格校验；未登记的组件会把状态写入 `payload.component_status`，辅助排查。  
-7. **实例标识**：默认通过标签输出 `instance_id=os.Hostname()`，如需禁用或自定义主机标识，可通过 `Options.InstanceID` / `Options.DisableInstanceID` 调整。  
-8. **版本字段**：统一通过 `ServiceContext.Version` 填充版本信息，结合服务名方便在 Cloud Logging 中筛选部署批次。  
-9. **与 OTel 打通**：结合已有的 tracing middleware，把 span 信息注入日志，实现日志与 trace 的 cross-link。  
-10. **Ops 告警**：在 GCP 端使用基于 `severity>=ERROR` 或关键字的 Rule，统一落地报警策略。
+- [ ] 提供 `DecodeEntries`、`AssertEntry` 等测试辅助函数
+- [ ] 增加 `WithHTTPRequest` 默认实现，并在 README 中加入 HTTP middleware 示例
+- [ ] 可选：直接集成 `cloud.google.com/go/logging` API（FlushFunc 真正调用 `logger.Flush()`）
 
-按照上述约束实现后，`pkg/gclog` 能在不侵入业务代码的情况下，满足 Google Cloud Logging 的格式要求，并保留 Kratos 生态的全部能力。*** End Patch
+---
+
+如需讨论更多字段/辅助方法或 Pull Request，欢迎在 [GitHub: bionicotaku/lingo-utils](https://github.com/bionicotaku/lingo-utils) 提 Issue/PR。

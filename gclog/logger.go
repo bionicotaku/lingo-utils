@@ -7,79 +7,127 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-kratos/kratos/v2/log"
 )
 
-// FlushFunc allows the caller to flush buffered log entries.
+const (
+	messageKey     = "message"
+	traceKey       = "trace_id"
+	spanKey        = "span_id"
+	callerKey      = "caller"
+	payloadKey     = "payload"
+	labelsKey      = "labels"
+	httpRequestKey = "http_request"
+	errorKey       = "error"
+)
+
+// FlushFunc flushes buffered log entries.
 type FlushFunc func(context.Context) error
 
-// Options defines logger configuration.
+// Options defines logger configuration parameters.
 type Options struct {
-	Service           string
-	Version           string
-	ComponentTypes    map[string]struct{}
-	InstanceID        string
-	DisableInstanceID bool
-	Writer            io.Writer
+	Service              string
+	Version              string
+	ProjectID            string
+	Environment          string
+	StaticLabels         map[string]string
+	InstanceID           string
+	DisableInstanceID    bool
+	Writer               io.Writer
+	EnableSourceLocation bool
+	LabelNormalizer      func(map[string]string) map[string]string
 }
 
 // Option customises Options.
 type Option func(*Options)
 
-// WithService sets the service field (required).
+// WithService configures the service name (required).
 func WithService(name string) Option {
 	return func(o *Options) {
 		o.Service = name
 	}
 }
 
-// WithVersion sets the version field (required).
+// WithVersion configures the service version (required).
 func WithVersion(version string) Option {
 	return func(o *Options) {
 		o.Version = version
 	}
 }
 
-// WithComponentTypes registers legal component names. When empty, any component is accepted.
-func WithComponentTypes(components ...string) Option {
+// WithProjectID configures the GCP project used to build trace URLs.
+func WithProjectID(project string) Option {
 	return func(o *Options) {
-		if o.ComponentTypes == nil {
-			o.ComponentTypes = make(map[string]struct{}, len(components))
+		o.ProjectID = project
+	}
+}
+
+// WithEnvironment configures an environment string (prod/staging/etc).
+func WithEnvironment(env string) Option {
+	return func(o *Options) {
+		o.Environment = env
+	}
+}
+
+// WithStaticLabels registers constant labels that apply to all entries.
+func WithStaticLabels(labels map[string]string) Option {
+	return func(o *Options) {
+		if len(labels) == 0 {
+			return
 		}
-		for _, c := range components {
-			if c == "" {
+		if o.StaticLabels == nil {
+			o.StaticLabels = make(map[string]string, len(labels))
+		}
+		for k, v := range labels {
+			if k == "" {
 				continue
 			}
-			o.ComponentTypes[c] = struct{}{}
+			o.StaticLabels[k] = v
 		}
 	}
 }
 
-// WithInstanceID overrides the default instance identifier.
+// WithInstanceID sets the instance identifier label.
 func WithInstanceID(id string) Option {
 	return func(o *Options) {
 		o.InstanceID = id
 	}
 }
 
-// DisableInstanceID disables emitting the instance identifier label.
+// DisableInstanceID prevents emitting the instance_id label.
 func DisableInstanceID() Option {
 	return func(o *Options) {
 		o.DisableInstanceID = true
 	}
 }
 
-// WithWriter configures the underlying writer (defaults to stdout).
+// WithWriter configures the output writer (defaults to stdout).
 func WithWriter(w io.Writer) Option {
 	return func(o *Options) {
 		o.Writer = w
 	}
 }
 
-// ValidateOptions ensures mandatory fields are provided and populates defaults.
+// EnableSourceLocation records source file / line / function for each entry.
+func EnableSourceLocation() Option {
+	return func(o *Options) {
+		o.EnableSourceLocation = true
+	}
+}
+
+// WithLabelNormalizer allows overriding label normalisation (e.g. sanitize keys).
+func WithLabelNormalizer(fn func(map[string]string) map[string]string) Option {
+	return func(o *Options) {
+		o.LabelNormalizer = fn
+	}
+}
+
+// ValidateOptions ensures mandatory fields exist and populates defaults.
 func ValidateOptions(opts *Options) error {
 	if opts.Service == "" {
 		return errors.New("gclog: service is required")
@@ -87,18 +135,21 @@ func ValidateOptions(opts *Options) error {
 	if opts.Version == "" {
 		return errors.New("gclog: version is required")
 	}
+	if opts.Writer == nil {
+		opts.Writer = os.Stdout
+	}
+	if opts.StaticLabels == nil {
+		opts.StaticLabels = make(map[string]string)
+	}
 	if !opts.DisableInstanceID && opts.InstanceID == "" {
 		if host, err := os.Hostname(); err == nil {
 			opts.InstanceID = host
 		}
 	}
-	if opts.Writer == nil {
-		opts.Writer = os.Stdout
-	}
 	return nil
 }
 
-// NewLogger constructs a Logger that satisfies the Kratos log.Logger interface.
+// NewLogger constructs a Logger that satisfies Kratos log.Logger.
 func NewLogger(opts ...Option) (log.Logger, FlushFunc, error) {
 	cfg := &Options{}
 	for _, opt := range opts {
@@ -107,29 +158,38 @@ func NewLogger(opts ...Option) (log.Logger, FlushFunc, error) {
 	if err := ValidateOptions(cfg); err != nil {
 		return nil, nil, err
 	}
-	l := &Logger{
-		opts: *cfg,
-		w:    cfg.Writer,
+	staticLabels := make(map[string]string, len(cfg.StaticLabels))
+	for k, v := range cfg.StaticLabels {
+		staticLabels[k] = v
 	}
-	l.allowedKeys = map[string]struct{}{
-		log.DefaultMessageKey: {},
-		"trace_id":           {},
-		"span_id":            {},
-		"component":          {},
-		"payload":            {},
+	l := &Logger{
+		opts:         *cfg,
+		w:            cfg.Writer,
+		staticLabels: staticLabels,
+		allowedKeys: map[string]struct{}{
+			log.DefaultMessageKey: {},
+			traceKey:              {},
+			spanKey:               {},
+			callerKey:             {},
+			payloadKey:            {},
+			labelsKey:             {},
+			httpRequestKey:        {},
+			errorKey:              {},
+		},
 	}
 	return l, func(context.Context) error { return nil }, nil
 }
 
-// Logger implements the Kratos log.Logger interface and emits Cloud Logging compatible JSON.
+// Logger implements log.Logger and emits Cloud Logging compatible entries.
 type Logger struct {
-	opts        Options
-	w           io.Writer
-	mu          sync.Mutex
-	allowedKeys map[string]struct{}
+	opts         Options
+	w            io.Writer
+	mu           sync.Mutex
+	staticLabels map[string]string
+	allowedKeys  map[string]struct{}
 }
 
-// Log satisfies log.Logger.
+// Log implements the Kratos log.Logger interface.
 func (l *Logger) Log(level log.Level, keyvals ...interface{}) error {
 	if len(keyvals)%2 != 0 {
 		keyvals = append(keyvals, nil)
@@ -139,46 +199,72 @@ func (l *Logger) Log(level log.Level, keyvals ...interface{}) error {
 		msg           string
 		traceID       string
 		spanID        string
-		component     string
+		caller        string
 		customPayload map[string]any
+		customLabels  map[string]string
+		httpReq       *httpRequest
+		errValue      string
 	)
 
-	payload := make(map[string]any)
-
+	// parse keyvals
 	for i := 0; i < len(keyvals); i += 2 {
-		key := fmt.Sprint(keyvals[i])
-		if _, ok := l.allowedKeys[key]; !ok {
-			return fmt.Errorf("gclog: unsupported log field %q - use payload for custom data", key)
+		key, ok := keyvals[i].(string)
+		if !ok {
+			continue
+		}
+		if _, allowed := l.allowedKeys[key]; !allowed {
+			return fmt.Errorf("gclog: unsupported log field %q", key)
 		}
 		val := keyvals[i+1]
-
 		switch key {
-	case log.DefaultMessageKey:
+		case log.DefaultMessageKey:
 			msg, _ = val.(string)
-		case "trace_id":
+		case traceKey:
 			traceID, _ = val.(string)
-		case "span_id":
+		case spanKey:
 			spanID, _ = val.(string)
-		case "component":
-			if s, ok := val.(string); ok && s != "" {
-				if len(l.opts.ComponentTypes) == 0 {
-					component = s
-				} else if _, allowed := l.opts.ComponentTypes[s]; allowed {
-					component = s
-				} else {
-					payload["component_status"] = fmt.Sprintf("invalid:%s", s)
-				}
-			}
-		case "payload":
+		case callerKey:
+			caller, _ = val.(string)
+		case payloadKey:
 			if val == nil {
-				customPayload = nil
 				continue
 			}
 			m, ok := val.(map[string]any)
 			if !ok {
 				return errors.New("gclog: payload must be map[string]any")
 			}
-			customPayload = m
+			if customPayload == nil {
+				customPayload = make(map[string]any, len(m))
+			}
+			for pk, pv := range m {
+				customPayload[pk] = pv
+			}
+		case labelsKey:
+			if customLabels == nil {
+				customLabels = make(map[string]string)
+			}
+			switch v := val.(type) {
+			case map[string]string:
+				for lk, lv := range v {
+					customLabels[lk] = lv
+				}
+			case map[string]any:
+				for lk, lv := range v {
+					customLabels[lk] = fmt.Sprint(lv)
+				}
+			}
+		case httpRequestKey:
+			switch v := val.(type) {
+			case *httpRequest:
+				httpReq = v
+			case httpRequest:
+				h := v
+				httpReq = &h
+			}
+		case errorKey:
+			if val != nil {
+				errValue = fmt.Sprint(val)
+			}
 		}
 	}
 
@@ -194,29 +280,78 @@ func (l *Logger) Log(level log.Level, keyvals ...interface{}) error {
 			Service: l.opts.Service,
 			Version: l.opts.Version,
 		},
-		Trace:  traceID,
-		SpanID: spanID,
+	}
+	if l.opts.Environment != "" {
+		entry.ServiceContext.Environment = l.opts.Environment
 	}
 
-	labels := map[string]string{}
-	if component != "" {
-		labels["component"] = component
+	entry.Trace = l.composeTrace(traceID)
+	entry.SpanID = spanID
+
+	if l.opts.EnableSourceLocation {
+		if src := captureSourceLocation(); src != nil {
+			entry.SourceLocation = src
+		}
 	}
-	if !l.opts.DisableInstanceID && l.opts.InstanceID != "" {
-		labels["instance_id"] = l.opts.InstanceID
+
+	if httpReq != nil {
+		entry.HTTPRequest = httpReq
 	}
+
+	labels := l.composeLabels(caller, customLabels)
 	if len(labels) > 0 {
+		if l.opts.LabelNormalizer != nil {
+			labels = l.opts.LabelNormalizer(labels)
+		}
 		entry.Labels = labels
 	}
 
+	payload := map[string]any{}
 	if len(customPayload) > 0 {
 		payload["payload"] = customPayload
+	}
+	if errValue != "" {
+		payload["error"] = errValue
 	}
 	if len(payload) > 0 {
 		entry.JSONPayload = payload
 	}
 
 	return l.write(entry)
+}
+
+func (l *Logger) composeTrace(traceID string) string {
+	traceID = strings.TrimSpace(traceID)
+	if traceID == "" {
+		return ""
+	}
+	if strings.HasPrefix(traceID, "projects/") {
+		return traceID
+	}
+	if l.opts.ProjectID != "" {
+		return fmt.Sprintf("projects/%s/traces/%s", l.opts.ProjectID, traceID)
+	}
+	return traceID
+}
+
+func (l *Logger) composeLabels(caller string, custom map[string]string) map[string]string {
+	labels := make(map[string]string, len(l.staticLabels)+4)
+	for k, v := range l.staticLabels {
+		labels[k] = v
+	}
+	if !l.opts.DisableInstanceID && l.opts.InstanceID != "" {
+		labels["instance_id"] = l.opts.InstanceID
+	}
+	if caller != "" {
+		labels[callerKey] = caller
+	}
+	for k, v := range custom {
+		if k == "" {
+			continue
+		}
+		labels[k] = v
+	}
+	return labels
 }
 
 func (l *Logger) write(entry logEntry) error {
@@ -230,22 +365,41 @@ func (l *Logger) write(entry logEntry) error {
 	return err
 }
 
-type logEntry struct {
-	Timestamp      string            `json:"timestamp"`
-	Severity       string            `json:"severity"`
-	Message        string            `json:"message"`
-	ServiceContext serviceContext    `json:"serviceContext"`
-	Trace          string            `json:"trace,omitempty"`
-	SpanID         string            `json:"spanId,omitempty"`
-	Labels         map[string]string `json:"labels,omitempty"`
-	JSONPayload    map[string]any    `json:"jsonPayload,omitempty"`
+// cloneLabels copies a map[string]string.
+func cloneLabels(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
-type serviceContext struct {
-	Service string `json:"service"`
-	Version string `json:"version"`
+// captureSourceLocation returns caller info when enabled.
+func captureSourceLocation() *sourceLocation {
+	pcs := make([]uintptr, 16)
+	n := runtime.Callers(4, pcs)
+	for _, pc := range pcs[:n] {
+		fn := runtime.FuncForPC(pc)
+		if fn == nil {
+			continue
+		}
+		file, line := fn.FileLine(pc)
+		if file == "" || strings.Contains(file, "/runtime/") || strings.Contains(file, "/testing/") {
+			continue
+		}
+		return &sourceLocation{
+			File:     file,
+			Line:     line,
+			Function: fn.Name(),
+		}
+	}
+	return nil
 }
 
+// severityFromLevel converts Kratos level to Cloud Logging severity text.
 func severityFromLevel(level log.Level) string {
 	switch level {
 	case log.LevelDebug:
@@ -259,4 +413,48 @@ func severityFromLevel(level log.Level) string {
 	default:
 		return "INFO"
 	}
+}
+
+// logEntry mirrors Cloud Logging JSON structure.
+type logEntry struct {
+	Timestamp      string            `json:"timestamp"`
+	Severity       string            `json:"severity,omitempty"`
+	Message        string            `json:"message,omitempty"`
+	ServiceContext serviceContext    `json:"serviceContext"`
+	Trace          string            `json:"trace,omitempty"`
+	SpanID         string            `json:"spanId,omitempty"`
+	SourceLocation *sourceLocation   `json:"sourceLocation,omitempty"`
+	HTTPRequest    *httpRequest      `json:"httpRequest,omitempty"`
+	Labels         map[string]string `json:"labels,omitempty"`
+	JSONPayload    map[string]any    `json:"jsonPayload,omitempty"`
+}
+
+type serviceContext struct {
+	Service     string `json:"service"`
+	Version     string `json:"version"`
+	Environment string `json:"environment,omitempty"`
+}
+
+type sourceLocation struct {
+	File     string `json:"file"`
+	Line     int    `json:"line"`
+	Function string `json:"function,omitempty"`
+}
+
+type httpRequest struct {
+	RequestMethod                  string `json:"requestMethod,omitempty"`
+	RequestURL                     string `json:"requestUrl,omitempty"`
+	RequestSize                    string `json:"requestSize,omitempty"`
+	Status                         int    `json:"status,omitempty"`
+	ResponseSize                   string `json:"responseSize,omitempty"`
+	UserAgent                      string `json:"userAgent,omitempty"`
+	RemoteIP                       string `json:"remoteIp,omitempty"`
+	ServerIP                       string `json:"serverIp,omitempty"`
+	Referer                        string `json:"referer,omitempty"`
+	Latency                        string `json:"latency,omitempty"`
+	CacheLookup                    bool   `json:"cacheLookup,omitempty"`
+	CacheHit                       bool   `json:"cacheHit,omitempty"`
+	CacheValidatedWithOriginServer bool   `json:"cacheValidatedWithOriginServer,omitempty"`
+	CacheFillBytes                 string `json:"cacheFillBytes,omitempty"`
+	Protocol                       string `json:"protocol,omitempty"`
 }
