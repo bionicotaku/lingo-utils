@@ -93,6 +93,23 @@ func WithError(logger log.Logger, err error) log.Logger {
 	return log.With(logger, errorKey, err.Error())
 }
 
+// WithMetadata attaches metadata key/value pairs (e.g. transport headers) to the payload.
+// Values with a single element are flattened to the scalar; multi-value entries are preserved as []string.
+func WithMetadata(logger log.Logger, md map[string][]string) log.Logger {
+	if len(md) == 0 {
+		return logger
+	}
+	payload := map[string]any{
+		"metadata": metadataToAny(md),
+	}
+	return WithPayload(logger, payload)
+}
+
+// MetadataToMap flattens a metadata map (map[string][]string) into a map suitable for logging payloads.
+func MetadataToMap(md map[string][]string) map[string]any {
+	return metadataToAny(md)
+}
+
 // WithHTTPRequest records a structured HTTP request summary.
 func WithHTTPRequest(logger log.Logger, req *http.Request, status int, latency time.Duration, opts ...HTTPRequestOption) log.Logger {
 	if req == nil {
@@ -300,4 +317,21 @@ func formatDuration(d time.Duration) string {
 		return "0s"
 	}
 	return fmt.Sprintf("%.3fs", d.Seconds())
+}
+
+func metadataToAny(md map[string][]string) map[string]any {
+	result := make(map[string]any, len(md))
+	for key, values := range md {
+		if len(values) == 0 {
+			continue
+		}
+		if len(values) == 1 {
+			result[key] = values[0]
+			continue
+		}
+		copied := make([]string, len(values))
+		copy(copied, values)
+		result[key] = copied
+	}
+	return result
 }

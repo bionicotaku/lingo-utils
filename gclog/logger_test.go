@@ -166,6 +166,45 @@ func TestLoggerAllowsCustomKeys(t *testing.T) {
 	require.Equal(t, "v", extra["k"])
 }
 
+func TestWithMetadata(t *testing.T) {
+	logger, buf, err := NewTestLogger(WithService("svc"), WithVersion("v1"))
+	require.NoError(t, err)
+
+	md := map[string][]string{
+		"x-request-id": {"req-1"},
+		"x-feature":    {"a", "b"},
+		"empty":        {},
+	}
+
+	logger = WithMetadata(logger, md)
+	logger = WithPayload(logger, map[string]any{"extra": "value"})
+	require.NoError(t, logger.Log(log.LevelInfo, log.DefaultMessageKey, "meta"))
+
+	entry := decodeEntry(t, buf.String())
+	jp := entry["jsonPayload"].(map[string]any)
+	payload := jp["payload"].(map[string]any)
+	require.Equal(t, "value", payload["extra"])
+	meta := payload["metadata"].(map[string]any)
+	require.Equal(t, "req-1", meta["x-request-id"])
+	require.ElementsMatch(t, []interface{}{"a", "b"}, meta["x-feature"].([]interface{}))
+	_, hasEmpty := meta["empty"]
+	require.False(t, hasEmpty)
+}
+
+func TestMetadataToMap(t *testing.T) {
+	md := map[string][]string{
+		"single": {"one"},
+		"multi":  {"a", "b"},
+		"empty":  {},
+	}
+
+	result := MetadataToMap(md)
+	require.Equal(t, "one", result["single"])
+	require.ElementsMatch(t, []string{"a", "b"}, result["multi"].([]string))
+	_, ok := result["empty"]
+	require.False(t, ok)
+}
+
 func TestWithAllowedLabelKeys(t *testing.T) {
 	logger, buf, err := NewTestLogger(
 		WithService("svc"),

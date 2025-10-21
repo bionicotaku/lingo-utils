@@ -69,6 +69,8 @@ if err != nil {
 | `WithPayload(logger, payload)` | 将业务对象放入 `jsonPayload.payload` |
 | `WithStatus(logger, status)` | 将业务状态写入 payload（与 `WithPayload` 可叠加） |
 | `WithError(logger, error)` | 将错误信息结构化输出到 `jsonPayload.error` |
+| `WithMetadata(logger, map[string][]string)` | 将传输层 metadata（如请求头）写入 `jsonPayload.payload.metadata`，单值扁平化，多值保留数组 |
+| `MetadataToMap(map[string][]string)` | 转换 metadata 为 `map[string]any`，便于与 `logging.WithFields` 等配合使用 |
 | `WithHTTPRequest(logger, req, status, latency)` | 写入结构化 `httpRequest` 字段（方法、URL、状态、耗时、UA 等） |
 | `HTTPRequestResponseSize(bytes)` / `HTTPRequestServerIP(ip)` / `HTTPRequestCacheStatus(lookup, hit, validated)` | 配合 `WithHTTPRequest` 丰富响应体大小、服务端 IP、缓存命中信息 |
 | `SeverityFromHTTP(status)` | HTTP 状态码与 Kratos 日志级别映射 |
@@ -183,6 +185,7 @@ srv := grpc.NewServer(
 logger = gclog.WithTrace(ctx, logger)
 logger = gclog.WithRequestID(logger, requestID)
 logger = gclog.WithLabels(logger, map[string]string{"team": "core"})
+logger = gclog.WithMetadata(logger, metadata)
 ```
 
 Kratos 输出的数值字段（如 `code`, `latency`）会保留原始类型写入 `jsonPayload`，方便在日志平台中做数值查询或聚合。
