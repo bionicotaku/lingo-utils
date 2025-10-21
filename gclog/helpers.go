@@ -16,15 +16,11 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// AppendTrace appends Cloud Logging compatible trace/span identifiers to kvs.
-func AppendTrace(ctx context.Context, project string, kvs []interface{}) []interface{} {
+// AppendTrace appends trace/span identifiers to kvs.
+func AppendTrace(ctx context.Context, kvs []interface{}) []interface{} {
 	sc := trace.SpanContextFromContext(ctx)
 	if sc.HasTraceID() {
-		traceValue := sc.TraceID().String()
-		if project != "" {
-			traceValue = fmt.Sprintf("projects/%s/traces/%s", project, traceValue)
-		}
-		kvs = append(kvs, traceKey, traceValue)
+		kvs = append(kvs, traceKey, sc.TraceID().String())
 	}
 	if sc.HasSpanID() {
 		kvs = append(kvs, spanKey, sc.SpanID().String())
@@ -41,8 +37,8 @@ func AppendLabels(kvs []interface{}, labels map[string]string) []interface{} {
 }
 
 // WithTrace binds trace/span fields to the logger while preserving context.
-func WithTrace(ctx context.Context, project string, base log.Logger) log.Logger {
-	kvs := AppendTrace(ctx, project, nil)
+func WithTrace(ctx context.Context, base log.Logger) log.Logger {
+	kvs := AppendTrace(ctx, nil)
 	if len(kvs) == 0 {
 		return log.WithContext(ctx, base)
 	}
@@ -97,7 +93,7 @@ func WithError(logger log.Logger, err error) log.Logger {
 	return log.With(logger, errorKey, err.Error())
 }
 
-// WithHTTPRequest records HTTP request summary for Cloud Logging.
+// WithHTTPRequest records a structured HTTP request summary.
 func WithHTTPRequest(logger log.Logger, req *http.Request, status int, latency time.Duration, opts ...HTTPRequestOption) log.Logger {
 	if req == nil {
 		return logger
@@ -228,8 +224,8 @@ func (h *Helper) InfoWithPayload(msg string, payload map[string]any, kvs ...inte
 }
 
 // RequestLogger 组合 trace + caller + labels + payload。
-func RequestLogger(ctx context.Context, base log.Logger, projectID string, caller string, labels map[string]string, payload map[string]any) *Helper {
-	logger := WithTrace(ctx, projectID, base)
+func RequestLogger(ctx context.Context, base log.Logger, caller string, labels map[string]string, payload map[string]any) *Helper {
+	logger := WithTrace(ctx, base)
 	logger = WithCaller(logger, caller)
 	logger = WithLabels(logger, labels)
 	logger = WithPayload(logger, payload)
@@ -249,15 +245,15 @@ func LabelsFromKVs(kvs []interface{}) map[string]interface{} {
 	return out
 }
 
-// NewTestLogger 返回用于测试的 logger、缓冲区和 flush。
-func NewTestLogger(opts ...Option) (log.Logger, *bytes.Buffer, FlushFunc, error) {
+// NewTestLogger 返回用于测试的 logger 和缓冲区。
+func NewTestLogger(opts ...Option) (log.Logger, *bytes.Buffer, error) {
 	buf := &bytes.Buffer{}
 	options := append(opts, WithWriter(buf))
-	logger, flush, err := NewLogger(options...)
+	logger, err := NewLogger(options...)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
-	return logger, buf, flush, nil
+	return logger, buf, nil
 }
 
 // StubTraceContext returns a context carrying deterministic trace & span IDs for testing.

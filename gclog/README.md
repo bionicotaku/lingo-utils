@@ -16,7 +16,7 @@
 | `severity`         | ✅       | Kratos `log.Level` 映射为 `DEBUG/INFO/WARNING/ERROR/CRITICAL` 等 |
 | `message`          | ✅       | Kratos 默认消息键 `log.DefaultMessageKey` |
 | `serviceContext`   | ✅       | `Options.Service`、`Options.Version`，可扩展 `environment` |
-| `trace`            | 可选    | 若设置 `Options.ProjectID` + OTel SpanContext，则输出 `projects/<project>/traces/<trace-id>` |
+| `trace`            | 可选    | 若 OTel SpanContext 存在 TraceID，则输出对应十六进制字符串 |
 | `spanId`           | 可选    | 来自 OTel SpanContext |
 | `labels`           | 可选    | `caller`、`instance_id`、`request_id`、`user_id`、`env` 等维度信息 |
 | `httpRequest`      | 可选    | HTTP 摘要（方法、URL、状态、时延、UA 等），由 helper/middleware 填充 |
@@ -30,10 +30,9 @@
 ### 1. 构造层
 
 ```go
-logger, flush, err := gclog.NewLogger(
+logger, err := gclog.NewLogger(
     gclog.WithService("catalog-service"),
     gclog.WithVersion("2025.10.21"),
-    gclog.WithProjectID("my-gcp-project"),
     gclog.WithEnvironment("prod"),
     gclog.WithInstanceID("instance-001"),
     gclog.WithStaticLabels(map[string]string{"team": "growth"}),
@@ -42,18 +41,15 @@ logger, flush, err := gclog.NewLogger(
 if err != nil {
     panic(err)
 }
-defer flush(context.Background())
 ```
 
 **Options & Option Builders**
 - `WithService(string)` / `WithVersion(string)`：必填字段，映射到 `serviceContext`。
-- `WithProjectID(string)`：用于构建 Cloud Logging `trace` 字段；若部署在 GCP，务必提供项目 ID 才能在 Cloud Trace 控制台串联完整链路。
 - `WithEnvironment(string)`：写入 `serviceContext.environment` 或 `labels.env`，便于跨环境筛选。
 - `WithStaticLabels(map[string]string)`：预置自定义标签，如 `team`、`region`。
 - `WithInstanceID(string)` / `DisableInstanceID()`：控制 `labels.instance_id`。
 - `WithWriter(io.Writer)`：输出目标（默认 stdout，可换文件/缓冲区）。
 - `EnableSourceLocation()`：基于 `runtime.Caller` 自动填充 `sourceLocation`。
-- `WithFlushFunc(gclog.FlushFunc)`：覆写 flush 行为，接入 `cloud.google.com/go/logging` 时可传入 `logger.Flush`/`client.Close`。
 - `WithAllowedKeys(keys ...string)`：注册额外允许的字段，字段值默认合并进 `jsonPayload` 顶层。Kratos 默认中间件输出的字段已自动映射：`kind/component/operation` → `labels`，`args/code/reason/stack/latency` → `jsonPayload`。
 - `WithAllowedLabelKeys(keys ...string)`：注册额外 label 字段，写入 `labels`（用于扩展租户 ID、区域等维度）；底层会自动加入允许列表，无需再显式调用 `WithAllowedKeys`。
 
@@ -64,24 +60,24 @@ defer flush(context.Background())
 | Helper                               | 说明 |
 | Helper | 说明 |
 | --- | --- |
-| `AppendTrace(ctx, projectID, kvs)` | 将 OTel SpanContext 转换为 Cloud Logging `trace`/`spanId` 字段 |
+| `AppendTrace(ctx, kvs)` | 从 OTel SpanContext 取出 trace/span 信息追加到 kvs |
 | `AppendLabels(kvs, map[string]string)` | 在 kv 列表上追加 labels，便于 `logging.WithFields` 使用 |
-| `WithTrace(ctx, projectID, logger)` | 创建带 trace 元数据的新 logger，并保留原 context |
+| `WithTrace(ctx, logger)` | 创建带 trace 元数据的新 logger，并保留原 context |
 | `WithCaller(logger, caller)` | 追加 `caller` 标签（如 `pkg.Func:line`） |
 | `WithLabels(logger, map[string]string)` | 批量追加标签（team、region 等） |
 | `WithUser(logger, userID)` | 写入 `user_id` 标签，可搭配 `WithLabels` 写入自定义 ID（如 `request_id`） |
 | `WithPayload(logger, payload)` | 将业务对象放入 `jsonPayload.payload` |
 | `WithStatus(logger, status)` | 将业务状态写入 payload（与 `WithPayload` 可叠加） |
 | `WithError(logger, error)` | 将错误信息结构化输出到 `jsonPayload.error` |
-| `WithHTTPRequest(logger, req, status, latency)` | 写入 Cloud Logging `httpRequest` 结构（方法、URL、状态、耗时、UA 等） |
+| `WithHTTPRequest(logger, req, status, latency)` | 写入结构化 `httpRequest` 字段（方法、URL、状态、耗时、UA 等） |
 | `HTTPRequestResponseSize(bytes)` / `HTTPRequestServerIP(ip)` / `HTTPRequestCacheStatus(lookup, hit, validated)` | 配合 `WithHTTPRequest` 丰富响应体大小、服务端 IP、缓存命中信息 |
 | `SeverityFromHTTP(status)` | HTTP 状态码与 Kratos 日志级别映射 |
 | `type Helper struct{ *log.Helper }` | 扩展 Kratos Helper：`InfoWithPayload`、`WithCaller`、`WithPayload` 等 |
-| `RequestLogger(ctx, base, projectID, caller, labels, payload)` | 常见组合（trace + caller + labels + payload），可直接用于 middleware |
+| `RequestLogger(ctx, base, caller, labels, payload)` | 常见组合（trace + caller + labels + payload），可直接用于 middleware |
 
 ### 3. 测试工具
 
-- `NewTestLogger(opts ...Option) (log.Logger, *bytes.Buffer, FlushFn, error)`：返回基于内存缓冲的 logger，配合单测断言输出。
+- `NewTestLogger(opts ...Option) (log.Logger, *bytes.Buffer, error)`：返回基于内存缓冲的 logger，配合单测断言输出。
 - `StubTraceContext(ctx, traceID, spanID)`：生成固定 trace/span，避免依赖真实 OTel tracer。
 - `DecodeEntries(buffer)`（建议扩展）：将多条日志解析为 `[]Entry`，便于批量断言。
 
@@ -98,7 +94,7 @@ srv := grpc.NewServer(
         logging.Server(
             logging.WithLogger(logger),
             logging.WithFields(func(ctx context.Context) map[string]interface{} {
-                fields := gclog.AppendTrace(ctx, projectID, nil)
+                fields := gclog.AppendTrace(ctx, nil)
                 if rid := requestid.FromContext(ctx); rid != "" {
                     fields = gclog.AppendLabels(fields, map[string]string{"request_id": rid})
                 }
@@ -118,7 +114,7 @@ conn, err := grpc.DialInsecure(
         logging.Client(
             logging.WithLogger(logger),
             logging.WithFields(func(ctx context.Context) map[string]interface{} {
-                return gclog.LabelsFromKVs(gclog.AppendTrace(ctx, projectID, nil))
+                return gclog.LabelsFromKVs(gclog.AppendTrace(ctx, nil))
             }),
         ),
     ),
@@ -126,11 +122,11 @@ conn, err := grpc.DialInsecure(
 ```
 
 ### HTTP Server/Client
-HTTP 中可配合 `WithHTTPRequest` 写入 Cloud Logging 的 `httpRequest`，并仅记录必要摘要，避免采集请求体；若需要补充响应体大小、Server IP 等，可追加对应的 `HTTPRequestOption`。
+HTTP 中可配合 `WithHTTPRequest` 写入结构化 `httpRequest` 字段，并仅记录必要摘要，避免采集请求体；若需要补充响应体大小、Server IP 等，可追加对应的 `HTTPRequestOption`。
 
 ```go
 func httpLoggingFields(ctx context.Context) map[string]interface{} {
-    fields := gclog.AppendTrace(ctx, projectID, nil)
+    fields := gclog.AppendTrace(ctx, nil)
     if info, ok := transport.FromServerContext(ctx).(*http.Context); ok {
         fields = append(fields,
             "caller", info.Route(),
@@ -157,7 +153,7 @@ helper := gclog.NewHelper(
 
 Kratos `middleware/logging` 会输出一组顶层字段（`kind/component/operation/args/code/reason/stack/latency`）。`gclog` 已将它们自动映射：
 
-- `kind` / `component` / `operation` → 写入 `labels`，便于 Cloud Logging 过滤、聚合。
+- `kind` / `component` / `operation` → 写入 `labels`，便于日志平台按维度过滤、聚合。
 - `args` / `code` / `reason` / `stack` / `latency` → 写入 `jsonPayload`，保留结构化诊断信息。
 
 > ℹ️ `args` 默认是 `fmt.Sprintf("%+v", req)` 的结果，可能较大。建议为请求类型实现 `logging.Redacter` 接口或在调用中提前裁剪，避免将敏感或过大的 payload 写入日志。
@@ -165,15 +161,14 @@ Kratos `middleware/logging` 会输出一组顶层字段（`kind/component/operat
 开箱即可接入 Kratos：
 
 ```go
-	logger, flush, err := gclog.NewLogger(
-	    gclog.WithService("gateway"),
-	    gclog.WithVersion("2025.10.21"),
-	    gclog.WithAllowedLabelKeys("tenant_id"),
-	)
-	if err != nil {
-	    panic(err)
-	}
-	defer flush(context.Background())
+logger, err := gclog.NewLogger(
+    gclog.WithService("gateway"),
+    gclog.WithVersion("2025.10.21"),
+    gclog.WithAllowedLabelKeys("tenant_id"),
+)
+if err != nil {
+    panic(err)
+}
 
 srv := grpc.NewServer(
     grpc.Middleware(
@@ -185,12 +180,12 @@ srv := grpc.NewServer(
 需要补充 Trace / Request ID / 自定义标签时，链式调用 helper：
 
 ```go
-logger = gclog.WithTrace(ctx, "my-project", logger)
+logger = gclog.WithTrace(ctx, logger)
 logger = gclog.WithRequestID(logger, requestID)
 logger = gclog.WithLabels(logger, map[string]string{"team": "core"})
 ```
 
-Kratos 输出的数值字段（如 `code`, `latency`）会保留原始类型写入 `jsonPayload`，方便在 Cloud Logging 中做数值查询或聚合。
+Kratos 输出的数值字段（如 `code`, `latency`）会保留原始类型写入 `jsonPayload`，方便在日志平台中做数值查询或聚合。
 
 ## 输出示例
 
@@ -204,7 +199,7 @@ Kratos 输出的数值字段（如 `code`, `latency`）会保留原始类型写�
     "version": "2025.10.21",
     "environment": "prod"
   },
-  "trace": "projects/my-project/traces/3d8f09bd2cd9d4f7",
+  "trace": "3d8f09bd2cd9d4f7",
   "spanId": "a1b2c3d4e5f6g7h8",
   "sourceLocation": {
     "file": "internal/service/video.go",
@@ -250,7 +245,7 @@ go test ./...
 ```go
 import gclog "github.com/bionicotaku/lingo-utils/gclog"
 
-logger, flush, err := gclog.NewLogger(
+logger, err := gclog.NewLogger(
     gclog.WithService("catalog"),
     gclog.WithVersion("2025.10.21"),
     gclog.WithEnvironment("prod-cn"),
@@ -258,7 +253,6 @@ logger, flush, err := gclog.NewLogger(
 if err != nil {
     panic(err)
 }
-defer flush(context.Background())
 
 log.NewHelper(logger).Info("booted")
 ```
@@ -272,7 +266,7 @@ log.NewHelper(logger).Info("booted")
 3. **trace 必要性**：只有在上下游链路都启用了 OTel tracing 时才输出 `trace`/`spanId`；否则留空即可。
 4. **敏感数据处理**：可结合 Kratos `log.NewFilter` 或自定义 helper 对 payload 中的隐私字段做脱敏。
 5. **测试**：使用 `NewTestLogger` + `StubTraceContext` 构造单测，确保日志 JSON 符合预期。
-6. **部署验证**：在 Cloud Logging 控制台确认日志能按 `serviceContext.service`、`serviceContext.version`、`labels` 等维度筛选；如启用了 Error Reporting，检查是否按版本自动聚合。
+6. **部署验证**：在实际使用的日志聚合/观测平台中确认 `serviceContext.service`、`serviceContext.version`、`labels` 等维度可筛选，确保输出结构满足检索需求。
 
 > **关于 Operation / Resource**  
 > gclog 目前专注于应用日志的核心字段。若需要将多条日志归属同一长操作（`operation.id/first/last`）或显式指定 GCP 资源类型（`resource.type`），可以在后续迭代中通过扩展 Options 与 logEntry 结构实现；Cloud Logging API 允许直接设定这些字段。
@@ -283,17 +277,18 @@ log.NewHelper(logger).Info("booted")
 
 - [ ] 提供 `DecodeEntries`、`AssertEntry` 等测试辅助函数
 - [ ] 增加 `WithHTTPRequest` 默认实现，并在 README 中加入 HTTP middleware 示例
-- [ ] 可选：直接集成 `cloud.google.com/go/logging` API（FlushFunc 真正调用 `logger.Flush()`）
-
 ---
 
 如需讨论更多字段/辅助方法或 Pull Request，欢迎在 [GitHub: bionicotaku/lingo-utils](https://github.com/bionicotaku/lingo-utils) 提 Issue/PR。
 ```go
-logger, flush, err := gclog.NewLogger(
+logger, err := gclog.NewLogger(
     gclog.WithService("catalog"),
     gclog.WithVersion("2025.10.21"),
     gclog.WithAllowedLabelKeys("tenant_id"),
     gclog.WithAllowedKeys("workflow_state"),
 )
+if err != nil {
+    panic(err)
+}
 // tenant_id 将作为 label 输出，workflow_state 会进入 jsonPayload 顶层。
 ```

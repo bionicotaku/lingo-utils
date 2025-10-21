@@ -1,7 +1,6 @@
 package gclog
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,14 +40,10 @@ var (
 	}
 )
 
-// FlushFunc flushes buffered log entries.
-type FlushFunc func(context.Context) error
-
 // Options defines logger configuration parameters.
 type Options struct {
 	Service              string
 	Version              string
-	ProjectID            string
 	Environment          string
 	StaticLabels         map[string]string
 	InstanceID           string
@@ -56,7 +51,6 @@ type Options struct {
 	Writer               io.Writer
 	EnableSourceLocation bool
 	LabelNormalizer      func(map[string]string) map[string]string
-	Flush                FlushFunc
 
 	extraAllowedKeys map[string]struct{}
 	extraLabelKeys   map[string]struct{}
@@ -76,13 +70,6 @@ func WithService(name string) Option {
 func WithVersion(version string) Option {
 	return func(o *Options) {
 		o.Version = version
-	}
-}
-
-// WithProjectID configures the GCP project used to build trace URLs.
-func WithProjectID(project string) Option {
-	return func(o *Options) {
-		o.ProjectID = project
 	}
 }
 
@@ -143,13 +130,6 @@ func EnableSourceLocation() Option {
 func WithLabelNormalizer(fn func(map[string]string) map[string]string) Option {
 	return func(o *Options) {
 		o.LabelNormalizer = fn
-	}
-}
-
-// WithFlushFunc overrides the flush behaviour, useful when integrating Cloud Logging client.
-func WithFlushFunc(fn FlushFunc) Option {
-	return func(o *Options) {
-		o.Flush = fn
 	}
 }
 
@@ -215,20 +195,17 @@ func ValidateOptions(opts *Options) error {
 			opts.InstanceID = host
 		}
 	}
-	if opts.Flush == nil {
-		opts.Flush = func(context.Context) error { return nil }
-	}
 	return nil
 }
 
 // NewLogger constructs a Logger that satisfies Kratos log.Logger.
-func NewLogger(opts ...Option) (log.Logger, FlushFunc, error) {
+func NewLogger(opts ...Option) (log.Logger, error) {
 	cfg := &Options{}
 	for _, opt := range opts {
 		opt(cfg)
 	}
 	if err := ValidateOptions(cfg); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	staticLabels := make(map[string]string, len(cfg.StaticLabels))
 	for k, v := range cfg.StaticLabels {
@@ -274,7 +251,7 @@ func NewLogger(opts ...Option) (log.Logger, FlushFunc, error) {
 	for key := range payloadKeys {
 		l.allowedKeys[key] = struct{}{}
 	}
-	return l, cfg.Flush, nil
+	return l, nil
 }
 
 // Logger implements log.Logger and emits Cloud Logging compatible entries.
@@ -458,9 +435,6 @@ func (l *Logger) composeTrace(traceID string) string {
 	}
 	if strings.HasPrefix(traceID, "projects/") {
 		return traceID
-	}
-	if l.opts.ProjectID != "" {
-		return fmt.Sprintf("projects/%s/traces/%s", l.opts.ProjectID, traceID)
 	}
 	return traceID
 }
