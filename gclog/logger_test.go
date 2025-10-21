@@ -28,6 +28,22 @@ func TestNewLoggerValidation(t *testing.T) {
 	require.NoError(t, flush(context.Background()))
 }
 
+func TestWithFlushFunc(t *testing.T) {
+	var called bool
+	logger, _, flush, err := NewTestLogger(
+		WithService("svc"),
+		WithVersion("v1"),
+		WithFlushFunc(func(ctx context.Context) error {
+			called = true
+			return nil
+		}),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, logger)
+	require.NoError(t, flush(context.Background()))
+	require.True(t, called)
+}
+
 func TestLoggerWritesExpectedJSON(t *testing.T) {
 	logger, buf, _, err := NewTestLogger(
 		WithService("catalog"),
@@ -92,6 +108,26 @@ func TestLoggerRejectsUnsupportedKey(t *testing.T) {
 
 	err = logger.Log(log.LevelInfo, "foo", "bar")
 	require.Error(t, err)
+}
+
+func TestLoggerAllowsCustomKeys(t *testing.T) {
+	logger, buf, _, err := NewTestLogger(
+		WithService("svc"),
+		WithVersion("v1"),
+		WithAllowedKeys("extra"),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, logger.Log(
+		log.LevelInfo,
+		log.DefaultMessageKey, "msg",
+		"extra", map[string]any{"k": "v"},
+	))
+
+	entry := decodeEntry(t, buf.String())
+	payload := entry["jsonPayload"].(map[string]any)
+	extra := payload["extra"].(map[string]any)
+	require.Equal(t, "v", extra["k"])
 }
 
 func TestInstanceIDLabels(t *testing.T) {
@@ -198,7 +234,15 @@ func TestWithHTTPRequest(t *testing.T) {
 	req.Header.Set("User-Agent", "test-agent")
 	req.RemoteAddr = "127.0.0.1:12345"
 
-	logger = WithHTTPRequest(logger, req, 200, 150*time.Millisecond)
+	logger = WithHTTPRequest(
+		logger,
+		req,
+		200,
+		150*time.Millisecond,
+		HTTPRequestResponseSize(512),
+		HTTPRequestServerIP("10.0.0.1"),
+		HTTPRequestCacheStatus(true, true, false),
+	)
 	require.NoError(t, logger.Log(log.LevelInfo, log.DefaultMessageKey, "http req"))
 
 	entry := decodeEntry(t, buf.String())
@@ -208,6 +252,12 @@ func TestWithHTTPRequest(t *testing.T) {
 	require.Equal(t, "0.150s", httpReq["latency"])
 	require.Equal(t, "test-agent", httpReq["userAgent"])
 	require.Equal(t, "127.0.0.1", httpReq["remoteIp"])
+	require.Equal(t, "512", httpReq["responseSize"])
+	require.Equal(t, "10.0.0.1", httpReq["serverIp"])
+	require.Equal(t, true, httpReq["cacheLookup"])
+	require.Equal(t, true, httpReq["cacheHit"])
+	_, ok := httpReq["cacheValidatedWithOriginServer"]
+	require.False(t, ok)
 }
 
 func TestLabelsHelpers(t *testing.T) {
@@ -249,6 +299,25 @@ func TestWithErrorHelper(t *testing.T) {
 	entry := decodeEntry(t, buf.String())
 	payload := entry["jsonPayload"].(map[string]any)
 	require.Equal(t, "boom", payload["error"])
+}
+
+func TestJSONPayloadWithoutPayloadOrError(t *testing.T) {
+	logger, buf, _, err := NewTestLogger(
+		WithService("svc"),
+		WithVersion("v1"),
+		WithAllowedKeys("debug_id"),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, logger.Log(
+		log.LevelInfo,
+		log.DefaultMessageKey, "msg",
+		"debug_id", "abc123",
+	))
+
+	entry := decodeEntry(t, buf.String())
+	payload := entry["jsonPayload"].(map[string]any)
+	require.Equal(t, "abc123", payload["debug_id"])
 }
 
 func decodeEntry(t *testing.T, raw string) map[string]any {

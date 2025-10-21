@@ -53,6 +53,10 @@ defer flush(context.Background())
 - `WithInstanceID(string)` / `DisableInstanceID()`：控制 `labels.instance_id`。
 - `WithWriter(io.Writer)`：输出目标（默认 stdout，可换文件/缓冲区）。
 - `EnableSourceLocation()`：基于 `runtime.Caller` 自动填充 `sourceLocation`。
+- `WithFlushFunc(gclog.FlushFunc)`：覆写 flush 行为，接入 `cloud.google.com/go/logging` 时可传入 `logger.Flush`/`client.Close`。
+- `WithAllowedKeys(keys ...string)`：注册额外允许的字段，字段值会直接合并进 `jsonPayload` 顶层。
+
+> ⚠️ **字段约束**：`gclog` 默认只接受核心字段（message/trace/span/caller/payload/labels/http_request/error）。如需输出自定义键，必须通过 helper（`WithPayload`/`WithLabels` 等）或 `WithAllowedKeys` 显式注册，否则会返回错误，避免出现与 Cloud Logging 不兼容的结构。
 
 ### 2. 上下文与 Helper
 
@@ -69,6 +73,7 @@ defer flush(context.Background())
 | `WithStatus(logger, status)` | 将业务状态写入 payload（与 `WithPayload` 可叠加） |
 | `WithError(logger, error)` | 将错误信息结构化输出到 `jsonPayload.error` |
 | `WithHTTPRequest(logger, req, status, latency)` | 写入 Cloud Logging `httpRequest` 结构（方法、URL、状态、耗时、UA 等） |
+| `HTTPRequestResponseSize(bytes)` / `HTTPRequestServerIP(ip)` / `HTTPRequestCacheStatus(lookup, hit, validated)` | 配合 `WithHTTPRequest` 丰富响应体大小、服务端 IP、缓存命中信息 |
 | `SeverityFromHTTP(status)` | HTTP 状态码与 Kratos 日志级别映射 |
 | `type Helper struct{ *log.Helper }` | 扩展 Kratos Helper：`InfoWithPayload`、`WithCaller`、`WithPayload` 等 |
 | `RequestLogger(ctx, base, projectID, caller, labels, payload)` | 常见组合（trace + caller + labels + payload），可直接用于 middleware |
@@ -120,7 +125,7 @@ conn, err := grpc.DialInsecure(
 ```
 
 ### HTTP Server/Client
-HTTP 中可配合 `WithHTTPRequest` 写入 Cloud Logging 的 `httpRequest`，并仅记录必要摘要，避免采集请求体。
+HTTP 中可配合 `WithHTTPRequest` 写入 Cloud Logging 的 `httpRequest`，并仅记录必要摘要，避免采集请求体；若需要补充响应体大小、Server IP 等，可追加对应的 `HTTPRequestOption`。
 
 ```go
 func httpLoggingFields(ctx context.Context) map[string]interface{} {
@@ -132,6 +137,19 @@ func httpLoggingFields(ctx context.Context) map[string]interface{} {
     }
     return gclog.LabelsFromKVs(fields)
 }
+```
+
+```go
+helper := gclog.NewHelper(
+    gclog.WithHTTPRequest(
+        baseLogger,
+        req,
+        status,
+        latency,
+        gclog.HTTPRequestResponseSize(respBytes),
+        gclog.HTTPRequestServerIP(serverIP),
+    ),
+)
 ```
 
 ---

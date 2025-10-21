@@ -41,6 +41,9 @@ type Options struct {
 	Writer               io.Writer
 	EnableSourceLocation bool
 	LabelNormalizer      func(map[string]string) map[string]string
+	Flush                FlushFunc
+
+	extraAllowedKeys map[string]struct{}
 }
 
 // Option customises Options.
@@ -127,6 +130,33 @@ func WithLabelNormalizer(fn func(map[string]string) map[string]string) Option {
 	}
 }
 
+// WithFlushFunc overrides the flush behaviour, useful when integrating Cloud Logging client.
+func WithFlushFunc(fn FlushFunc) Option {
+	return func(o *Options) {
+		o.Flush = fn
+	}
+}
+
+// WithAllowedKeys registers additional key names accepted by the logger.
+// Values written with these keys将被合并进 jsonPayload 顶层。
+func WithAllowedKeys(keys ...string) Option {
+	return func(o *Options) {
+		if len(keys) == 0 {
+			return
+		}
+		if o.extraAllowedKeys == nil {
+			o.extraAllowedKeys = make(map[string]struct{}, len(keys))
+		}
+		for _, key := range keys {
+			key = strings.TrimSpace(key)
+			if key == "" {
+				continue
+			}
+			o.extraAllowedKeys[key] = struct{}{}
+		}
+	}
+}
+
 // ValidateOptions ensures mandatory fields exist and populates defaults.
 func ValidateOptions(opts *Options) error {
 	if opts.Service == "" {
@@ -145,6 +175,9 @@ func ValidateOptions(opts *Options) error {
 		if host, err := os.Hostname(); err == nil {
 			opts.InstanceID = host
 		}
+	}
+	if opts.Flush == nil {
+		opts.Flush = func(context.Context) error { return nil }
 	}
 	return nil
 }
@@ -177,7 +210,10 @@ func NewLogger(opts ...Option) (log.Logger, FlushFunc, error) {
 			errorKey:              {},
 		},
 	}
-	return l, func(context.Context) error { return nil }, nil
+	for key := range cfg.extraAllowedKeys {
+		l.allowedKeys[key] = struct{}{}
+	}
+	return l, cfg.Flush, nil
 }
 
 // Logger implements log.Logger and emits Cloud Logging compatible entries.
@@ -204,6 +240,7 @@ func (l *Logger) Log(level log.Level, keyvals ...interface{}) error {
 		customLabels  map[string]string
 		httpReq       *httpRequest
 		errValue      string
+		extraJSON     map[string]any
 	)
 
 	// parse keyvals
@@ -265,6 +302,11 @@ func (l *Logger) Log(level log.Level, keyvals ...interface{}) error {
 			if val != nil {
 				errValue = fmt.Sprint(val)
 			}
+		default:
+			if extraJSON == nil {
+				extraJSON = make(map[string]any)
+			}
+			extraJSON[key] = val
 		}
 	}
 
@@ -306,15 +348,21 @@ func (l *Logger) Log(level log.Level, keyvals ...interface{}) error {
 		entry.Labels = labels
 	}
 
-	payload := map[string]any{}
-	if len(customPayload) > 0 {
-		payload["payload"] = customPayload
+	var jsonPayload map[string]any
+	if len(customPayload) > 0 || errValue != "" || len(extraJSON) > 0 {
+		jsonPayload = make(map[string]any, len(customPayload)+len(extraJSON)+2)
+		if len(customPayload) > 0 {
+			jsonPayload[payloadKey] = customPayload
+		}
+		if errValue != "" {
+			jsonPayload[errorKey] = errValue
+		}
+		for k, v := range extraJSON {
+			jsonPayload[k] = v
+		}
 	}
-	if errValue != "" {
-		payload["error"] = errValue
-	}
-	if len(payload) > 0 {
-		entry.JSONPayload = payload
+	if len(jsonPayload) > 0 {
+		entry.JSONPayload = jsonPayload
 	}
 
 	return l.write(entry)
@@ -363,18 +411,6 @@ func (l *Logger) write(entry logEntry) error {
 	defer l.mu.Unlock()
 	_, err = l.w.Write(append(data, '\n'))
 	return err
-}
-
-// cloneLabels copies a map[string]string.
-func cloneLabels(src map[string]string) map[string]string {
-	if len(src) == 0 {
-		return nil
-	}
-	dst := make(map[string]string, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
 }
 
 // captureSourceLocation returns caller info when enabled.

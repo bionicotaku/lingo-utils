@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -105,7 +106,7 @@ func WithError(logger log.Logger, err error) log.Logger {
 }
 
 // WithHTTPRequest records HTTP request summary for Cloud Logging.
-func WithHTTPRequest(logger log.Logger, req *http.Request, status int, latency time.Duration) log.Logger {
+func WithHTTPRequest(logger log.Logger, req *http.Request, status int, latency time.Duration, opts ...HTTPRequestOption) log.Logger {
 	if req == nil {
 		return logger
 	}
@@ -119,12 +120,51 @@ func WithHTTPRequest(logger log.Logger, req *http.Request, status int, latency t
 		Protocol:      req.Proto,
 	}
 	if req.ContentLength > 0 {
-		httpReq.RequestSize = fmt.Sprintf("%d", req.ContentLength)
+		httpReq.RequestSize = strconv.FormatInt(req.ContentLength, 10)
 	}
 	if latency > 0 {
 		httpReq.Latency = formatDuration(latency)
 	}
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		opt(httpReq)
+	}
 	return log.With(logger, httpRequestKey, httpReq)
+}
+
+// HTTPRequestOption allows callers to enrich HTTP request metadata.
+type HTTPRequestOption func(*httpRequest)
+
+// HTTPRequestResponseSize sets the response payload size in bytes.
+func HTTPRequestResponseSize(bytes int64) HTTPRequestOption {
+	return func(req *httpRequest) {
+		if bytes <= 0 {
+			return
+		}
+		req.ResponseSize = strconv.FormatInt(bytes, 10)
+	}
+}
+
+// HTTPRequestServerIP sets the server IP address reported in the log entry.
+func HTTPRequestServerIP(ip string) HTTPRequestOption {
+	return func(req *httpRequest) {
+		ip = strings.TrimSpace(ip)
+		if ip == "" {
+			return
+		}
+		req.ServerIP = ip
+	}
+}
+
+// HTTPRequestCacheStatus captures cache hit/miss information.
+func HTTPRequestCacheStatus(lookup, hit, validated bool) HTTPRequestOption {
+	return func(req *httpRequest) {
+		req.CacheLookup = lookup
+		req.CacheHit = hit
+		req.CacheValidatedWithOriginServer = validated
+	}
 }
 
 func clientIP(req *http.Request) string {
