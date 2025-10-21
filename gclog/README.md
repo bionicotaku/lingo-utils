@@ -54,9 +54,10 @@ defer flush(context.Background())
 - `WithWriter(io.Writer)`：输出目标（默认 stdout，可换文件/缓冲区）。
 - `EnableSourceLocation()`：基于 `runtime.Caller` 自动填充 `sourceLocation`。
 - `WithFlushFunc(gclog.FlushFunc)`：覆写 flush 行为，接入 `cloud.google.com/go/logging` 时可传入 `logger.Flush`/`client.Close`。
-- `WithAllowedKeys(keys ...string)`：注册额外允许的字段，字段值会直接合并进 `jsonPayload` 顶层。Kratos 默认中间件输出的字段已内置映射：`kind/component/operation` 自动落到 `labels`，`args/code/reason/stack/latency` 落到 `jsonPayload`，无需额外注册。
+- `WithAllowedKeys(keys ...string)`：注册额外允许的字段，字段值默认合并进 `jsonPayload` 顶层。Kratos 默认中间件输出的字段已自动映射：`kind/component/operation` → `labels`，`args/code/reason/stack/latency` → `jsonPayload`。
+- `WithAllowedLabelKeys(keys ...string)`：注册额外 label 字段，写入 `labels`（用于扩展租户 ID、区域等维度）。
 
-> ⚠️ **字段约束**：`gclog` 默认只接受核心字段（message/trace/span/caller/payload/labels/http_request/error）。如需输出自定义键，必须通过 helper（`WithPayload`/`WithLabels` 等）或 `WithAllowedKeys` 显式注册，否则会返回错误，避免出现与 Cloud Logging 不兼容的结构。
+> ⚠️ **字段约束**：`gclog` 默认只接受核心字段（message/trace/span/caller/payload/labels/http_request/error）。如需输出自定义键，必须通过 helper（`WithPayload`/`WithLabels` 等）或 `WithAllowedKeys` / `WithAllowedLabelKeys` 显式注册，否则会返回错误，避免出现与 Cloud Logging 不兼容的结构。
 
 ### 2. 上下文与 Helper
 
@@ -158,6 +159,8 @@ Kratos `middleware/logging` 会输出一组顶层字段（`kind/component/operat
 
 - `kind` / `component` / `operation` → 写入 `labels`，便于 Cloud Logging 过滤、聚合。
 - `args` / `code` / `reason` / `stack` / `latency` → 写入 `jsonPayload`，保留结构化诊断信息。
+
+> ℹ️ `args` 默认是 `fmt.Sprintf("%+v", req)` 的结果，可能较大。建议为请求类型实现 `logging.Redacter` 接口或在调用中提前裁剪，避免将敏感或过大的 payload 写入日志。
 
 开箱即可接入 Kratos：
 

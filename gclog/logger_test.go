@@ -138,7 +138,7 @@ func TestLoggerAcceptsKratosDefaultKeys(t *testing.T) {
 	require.Equal(t, float64(200), payload["code"])
 	require.Equal(t, "OK", payload["reason"])
 	require.Equal(t, "trace", payload["stack"])
-	require.Equal(t, 0.123, payload["latency"])
+	require.Equal(t, "0.123s", payload["latency"])
 }
 
 func TestKratosLabelMergeWithCustomLabels(t *testing.T) {
@@ -181,6 +181,25 @@ func TestLoggerAllowsCustomKeys(t *testing.T) {
 	payload := entry["jsonPayload"].(map[string]any)
 	extra := payload["extra"].(map[string]any)
 	require.Equal(t, "v", extra["k"])
+}
+
+func TestWithAllowedLabelKeys(t *testing.T) {
+	logger, buf, _, err := NewTestLogger(
+		WithService("svc"),
+		WithVersion("v1"),
+		WithAllowedLabelKeys("tenant"),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, logger.Log(log.LevelInfo, log.DefaultMessageKey, "msg", "tenant", "acme"))
+
+	entry := decodeEntry(t, buf.String())
+	labels := entry["labels"].(map[string]any)
+	require.Equal(t, "acme", labels["tenant"])
+	if payload, ok := entry["jsonPayload"].(map[string]any); ok {
+		_, hasTenant := payload["tenant"]
+		require.False(t, hasTenant)
+	}
 }
 
 func TestInstanceIDLabels(t *testing.T) {

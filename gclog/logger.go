@@ -26,17 +26,6 @@ const (
 	errorKey       = "error"
 )
 
-var kratosDefaultFields = [...]string{
-	"kind",
-	"component",
-	"operation",
-	"args",
-	"code",
-	"reason",
-	"stack",
-	"latency",
-}
-
 var (
 	kratosLabelFields = map[string]struct{}{
 		"kind":      {},
@@ -70,6 +59,7 @@ type Options struct {
 	Flush                FlushFunc
 
 	extraAllowedKeys map[string]struct{}
+	extraLabelKeys   map[string]struct{}
 }
 
 // Option customises Options.
@@ -183,6 +173,29 @@ func WithAllowedKeys(keys ...string) Option {
 	}
 }
 
+// WithAllowedLabelKeys registers additional keys that should be emitted as labels.
+func WithAllowedLabelKeys(keys ...string) Option {
+	return func(o *Options) {
+		if len(keys) == 0 {
+			return
+		}
+		if o.extraLabelKeys == nil {
+			o.extraLabelKeys = make(map[string]struct{}, len(keys))
+		}
+		for _, key := range keys {
+			key = strings.TrimSpace(key)
+			if key == "" {
+				continue
+			}
+			if o.extraAllowedKeys == nil {
+				o.extraAllowedKeys = make(map[string]struct{})
+			}
+			o.extraAllowedKeys[key] = struct{}{}
+			o.extraLabelKeys[key] = struct{}{}
+		}
+	}
+}
+
 // ValidateOptions ensures mandatory fields exist and populates defaults.
 func ValidateOptions(opts *Options) error {
 	if opts.Service == "" {
@@ -221,10 +234,29 @@ func NewLogger(opts ...Option) (log.Logger, FlushFunc, error) {
 	for k, v := range cfg.StaticLabels {
 		staticLabels[k] = v
 	}
+	labelKeys := make(map[string]struct{}, len(kratosLabelFields)+len(cfg.extraLabelKeys))
+	for k := range kratosLabelFields {
+		labelKeys[k] = struct{}{}
+	}
+	for k := range cfg.extraLabelKeys {
+		labelKeys[k] = struct{}{}
+	}
+	payloadKeys := make(map[string]struct{}, len(kratosPayloadFields)+len(cfg.extraAllowedKeys))
+	for k := range kratosPayloadFields {
+		payloadKeys[k] = struct{}{}
+	}
+	for k := range cfg.extraAllowedKeys {
+		if _, isLabel := labelKeys[k]; isLabel {
+			continue
+		}
+		payloadKeys[k] = struct{}{}
+	}
 	l := &Logger{
 		opts:         *cfg,
 		w:            cfg.Writer,
 		staticLabels: staticLabels,
+		labelKeys:    labelKeys,
+		payloadKeys:  payloadKeys,
 		allowedKeys: map[string]struct{}{
 			log.DefaultMessageKey: {},
 			traceKey:              {},
@@ -236,10 +268,10 @@ func NewLogger(opts ...Option) (log.Logger, FlushFunc, error) {
 			errorKey:              {},
 		},
 	}
-	for _, key := range kratosDefaultFields {
+	for key := range labelKeys {
 		l.allowedKeys[key] = struct{}{}
 	}
-	for key := range cfg.extraAllowedKeys {
+	for key := range payloadKeys {
 		l.allowedKeys[key] = struct{}{}
 	}
 	return l, cfg.Flush, nil
@@ -252,6 +284,8 @@ type Logger struct {
 	mu           sync.Mutex
 	staticLabels map[string]string
 	allowedKeys  map[string]struct{}
+	labelKeys    map[string]struct{}
+	payloadKeys  map[string]struct{}
 }
 
 // Log implements the Kratos log.Logger interface.
@@ -332,16 +366,22 @@ func (l *Logger) Log(level log.Level, keyvals ...interface{}) error {
 				errValue = fmt.Sprint(val)
 			}
 		default:
-			if _, ok := kratosLabelFields[key]; ok {
+			if _, ok := l.labelKeys[key]; ok {
 				if customLabels == nil {
 					customLabels = make(map[string]string)
 				}
 				customLabels[key] = fmt.Sprint(val)
 				continue
 			}
-			if _, ok := kratosPayloadFields[key]; ok {
+			if _, ok := l.payloadKeys[key]; ok {
 				if extraJSON == nil {
 					extraJSON = make(map[string]any)
+				}
+				if key == "latency" {
+					if secs, ok := val.(float64); ok {
+						extraJSON[key] = formatDurationSeconds(secs)
+						continue
+					}
 				}
 				extraJSON[key] = val
 				continue
@@ -454,6 +494,13 @@ func (l *Logger) write(entry logEntry) error {
 	defer l.mu.Unlock()
 	_, err = l.w.Write(append(data, '\n'))
 	return err
+}
+
+func formatDurationSeconds(seconds float64) string {
+	if seconds <= 0 {
+		return "0s"
+	}
+	return fmt.Sprintf("%.3fs", seconds)
 }
 
 // captureSourceLocation returns caller info when enabled.
