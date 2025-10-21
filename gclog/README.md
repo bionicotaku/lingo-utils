@@ -55,7 +55,7 @@ defer flush(context.Background())
 - `EnableSourceLocation()`：基于 `runtime.Caller` 自动填充 `sourceLocation`。
 - `WithFlushFunc(gclog.FlushFunc)`：覆写 flush 行为，接入 `cloud.google.com/go/logging` 时可传入 `logger.Flush`/`client.Close`。
 - `WithAllowedKeys(keys ...string)`：注册额外允许的字段，字段值默认合并进 `jsonPayload` 顶层。Kratos 默认中间件输出的字段已自动映射：`kind/component/operation` → `labels`，`args/code/reason/stack/latency` → `jsonPayload`。
-- `WithAllowedLabelKeys(keys ...string)`：注册额外 label 字段，写入 `labels`（用于扩展租户 ID、区域等维度）。
+- `WithAllowedLabelKeys(keys ...string)`：注册额外 label 字段，写入 `labels`（用于扩展租户 ID、区域等维度）；底层会自动加入允许列表，无需再显式调用 `WithAllowedKeys`。
 
 > ⚠️ **字段约束**：`gclog` 默认只接受核心字段（message/trace/span/caller/payload/labels/http_request/error）。如需输出自定义键，必须通过 helper（`WithPayload`/`WithLabels` 等）或 `WithAllowedKeys` / `WithAllowedLabelKeys` 显式注册，否则会返回错误，避免出现与 Cloud Logging 不兼容的结构。
 
@@ -165,14 +165,15 @@ Kratos `middleware/logging` 会输出一组顶层字段（`kind/component/operat
 开箱即可接入 Kratos：
 
 ```go
-logger, flush, err := gclog.NewLogger(
-    gclog.WithService("gateway"),
-    gclog.WithVersion("2025.10.21"),
-)
-if err != nil {
-    panic(err)
-}
-defer flush(context.Background())
+	logger, flush, err := gclog.NewLogger(
+	    gclog.WithService("gateway"),
+	    gclog.WithVersion("2025.10.21"),
+	    gclog.WithAllowedLabelKeys("tenant_id"),
+	)
+	if err != nil {
+	    panic(err)
+	}
+	defer flush(context.Background())
 
 srv := grpc.NewServer(
     grpc.Middleware(
@@ -287,3 +288,12 @@ log.NewHelper(logger).Info("booted")
 ---
 
 如需讨论更多字段/辅助方法或 Pull Request，欢迎在 [GitHub: bionicotaku/lingo-utils](https://github.com/bionicotaku/lingo-utils) 提 Issue/PR。
+```go
+logger, flush, err := gclog.NewLogger(
+    gclog.WithService("catalog"),
+    gclog.WithVersion("2025.10.21"),
+    gclog.WithAllowedLabelKeys("tenant_id"),
+    gclog.WithAllowedKeys("workflow_state"),
+)
+// tenant_id 将作为 label 输出，workflow_state 会进入 jsonPayload 顶层。
+```
