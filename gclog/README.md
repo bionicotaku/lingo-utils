@@ -54,7 +54,7 @@ defer flush(context.Background())
 - `WithWriter(io.Writer)`：输出目标（默认 stdout，可换文件/缓冲区）。
 - `EnableSourceLocation()`：基于 `runtime.Caller` 自动填充 `sourceLocation`。
 - `WithFlushFunc(gclog.FlushFunc)`：覆写 flush 行为，接入 `cloud.google.com/go/logging` 时可传入 `logger.Flush`/`client.Close`。
-- `WithAllowedKeys(keys ...string)`：注册额外允许的字段，字段值会直接合并进 `jsonPayload` 顶层。
+- `WithAllowedKeys(keys ...string)`：注册额外允许的字段，字段值会直接合并进 `jsonPayload` 顶层。Kratos 默认中间件输出的字段已内置映射：`kind/component/operation` 自动落到 `labels`，`args/code/reason/stack/latency` 落到 `jsonPayload`，无需额外注册。
 
 > ⚠️ **字段约束**：`gclog` 默认只接受核心字段（message/trace/span/caller/payload/labels/http_request/error）。如需输出自定义键，必须通过 helper（`WithPayload`/`WithLabels` 等）或 `WithAllowedKeys` 显式注册，否则会返回错误，避免出现与 Cloud Logging 不兼容的结构。
 
@@ -68,7 +68,7 @@ defer flush(context.Background())
 | `WithTrace(ctx, projectID, logger)` | 创建带 trace 元数据的新 logger，并保留原 context |
 | `WithCaller(logger, caller)` | 追加 `caller` 标签（如 `pkg.Func:line`） |
 | `WithLabels(logger, map[string]string)` | 批量追加标签（team、region 等） |
-| `WithRequestID` / `WithUser` | 快速写入 `request_id`、`user_id` 标签 |
+| `WithUser(logger, userID)` | 写入 `user_id` 标签，可搭配 `WithLabels` 写入自定义 ID（如 `request_id`） |
 | `WithPayload(logger, payload)` | 将业务对象放入 `jsonPayload.payload` |
 | `WithStatus(logger, status)` | 将业务状态写入 payload（与 `WithPayload` 可叠加） |
 | `WithError(logger, error)` | 将错误信息结构化输出到 `jsonPayload.error` |
@@ -152,7 +152,41 @@ helper := gclog.NewHelper(
 )
 ```
 
----
+### Kratos 中间件适配
+
+Kratos `middleware/logging` 会输出一组顶层字段（`kind/component/operation/args/code/reason/stack/latency`）。`gclog` 已将它们自动映射：
+
+- `kind` / `component` / `operation` → 写入 `labels`，便于 Cloud Logging 过滤、聚合。
+- `args` / `code` / `reason` / `stack` / `latency` → 写入 `jsonPayload`，保留结构化诊断信息。
+
+开箱即可接入 Kratos：
+
+```go
+logger, flush, err := gclog.NewLogger(
+    gclog.WithService("gateway"),
+    gclog.WithVersion("2025.10.21"),
+)
+if err != nil {
+    panic(err)
+}
+defer flush(context.Background())
+
+srv := grpc.NewServer(
+    grpc.Middleware(
+        logging.Server(logging.WithLogger(logger)),
+    ),
+)
+```
+
+需要补充 Trace / Request ID / 自定义标签时，链式调用 helper：
+
+```go
+logger = gclog.WithTrace(ctx, "my-project", logger)
+logger = gclog.WithRequestID(logger, requestID)
+logger = gclog.WithLabels(logger, map[string]string{"team": "core"})
+```
+
+Kratos 输出的数值字段（如 `code`, `latency`）会保留原始类型写入 `jsonPayload`，方便在 Cloud Logging 中做数值查询或聚合。
 
 ## 输出示例
 

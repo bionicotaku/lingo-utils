@@ -65,14 +65,6 @@ func WithLabels(logger log.Logger, labels map[string]string) log.Logger {
 	return log.With(logger, labelsKey, labels)
 }
 
-// WithRequestID adds a request identifier label.
-func WithRequestID(logger log.Logger, id string) log.Logger {
-	if id == "" {
-		return logger
-	}
-	return WithLabels(logger, map[string]string{"request_id": id})
-}
-
 // WithUser adds a user identifier label.
 func WithUser(logger log.Logger, userID string) log.Logger {
 	if userID == "" {

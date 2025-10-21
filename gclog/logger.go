@@ -26,6 +26,32 @@ const (
 	errorKey       = "error"
 )
 
+var kratosDefaultFields = [...]string{
+	"kind",
+	"component",
+	"operation",
+	"args",
+	"code",
+	"reason",
+	"stack",
+	"latency",
+}
+
+var (
+	kratosLabelFields = map[string]struct{}{
+		"kind":      {},
+		"component": {},
+		"operation": {},
+	}
+	kratosPayloadFields = map[string]struct{}{
+		"args":    {},
+		"code":    {},
+		"reason":  {},
+		"stack":   {},
+		"latency": {},
+	}
+)
+
 // FlushFunc flushes buffered log entries.
 type FlushFunc func(context.Context) error
 
@@ -210,6 +236,9 @@ func NewLogger(opts ...Option) (log.Logger, FlushFunc, error) {
 			errorKey:              {},
 		},
 	}
+	for _, key := range kratosDefaultFields {
+		l.allowedKeys[key] = struct{}{}
+	}
 	for key := range cfg.extraAllowedKeys {
 		l.allowedKeys[key] = struct{}{}
 	}
@@ -303,6 +332,20 @@ func (l *Logger) Log(level log.Level, keyvals ...interface{}) error {
 				errValue = fmt.Sprint(val)
 			}
 		default:
+			if _, ok := kratosLabelFields[key]; ok {
+				if customLabels == nil {
+					customLabels = make(map[string]string)
+				}
+				customLabels[key] = fmt.Sprint(val)
+				continue
+			}
+			if _, ok := kratosPayloadFields[key]; ok {
+				if extraJSON == nil {
+					extraJSON = make(map[string]any)
+				}
+				extraJSON[key] = val
+				continue
+			}
 			if extraJSON == nil {
 				extraJSON = make(map[string]any)
 			}

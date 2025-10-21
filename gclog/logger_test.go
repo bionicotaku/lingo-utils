@@ -110,6 +110,59 @@ func TestLoggerRejectsUnsupportedKey(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestLoggerAcceptsKratosDefaultKeys(t *testing.T) {
+	logger, buf, _, err := NewTestLogger(WithService("svc"), WithVersion("v1"))
+	require.NoError(t, err)
+
+	require.NoError(t, logger.Log(
+		log.LevelInfo,
+		log.DefaultMessageKey, "msg",
+		"kind", "server",
+		"component", "grpc",
+		"operation", "gateway.catalog",
+		"args", "request",
+		"code", int32(200),
+		"reason", "OK",
+		"stack", "trace",
+		"latency", 0.123,
+	))
+
+	entry := decodeEntry(t, buf.String())
+	labels := entry["labels"].(map[string]any)
+	require.Equal(t, "server", labels["kind"])
+	require.Equal(t, "grpc", labels["component"])
+	require.Equal(t, "gateway.catalog", labels["operation"])
+
+	payload := entry["jsonPayload"].(map[string]any)
+	require.Equal(t, "request", payload["args"])
+	require.Equal(t, float64(200), payload["code"])
+	require.Equal(t, "OK", payload["reason"])
+	require.Equal(t, "trace", payload["stack"])
+	require.Equal(t, 0.123, payload["latency"])
+}
+
+func TestKratosLabelMergeWithCustomLabels(t *testing.T) {
+	logger, buf, _, err := NewTestLogger(WithService("svc"), WithVersion("v1"))
+	require.NoError(t, err)
+
+	logger = WithLabels(logger, map[string]string{"team": "infra"})
+
+	require.NoError(t, logger.Log(
+		log.LevelInfo,
+		log.DefaultMessageKey, "msg",
+		"kind", "client",
+		"component", "http",
+		"operation", "GET /v1/foo",
+	))
+
+	entry := decodeEntry(t, buf.String())
+	labels := entry["labels"].(map[string]any)
+	require.Equal(t, "infra", labels["team"])
+	require.Equal(t, "client", labels["kind"])
+	require.Equal(t, "http", labels["component"])
+	require.Equal(t, "GET /v1/foo", labels["operation"])
+}
+
 func TestLoggerAllowsCustomKeys(t *testing.T) {
 	logger, buf, _, err := NewTestLogger(
 		WithService("svc"),
@@ -264,9 +317,11 @@ func TestLabelsHelpers(t *testing.T) {
 	logger, buf, _, err := NewTestLogger(WithService("svc"), WithVersion("v1"))
 	require.NoError(t, err)
 
-	logger = WithRequestID(logger, "req-123")
-	logger = WithUser(logger, "user-456")
-	logger = WithLabels(logger, map[string]string{"team": "growth"})
+	logger = WithLabels(logger, map[string]string{
+		"request_id": "req-123",
+		"user_id":    "user-456",
+		"team":       "growth",
+	})
 	require.NoError(t, logger.Log(log.LevelInfo, log.DefaultMessageKey, "msg"))
 
 	entry := decodeEntry(t, buf.String())
