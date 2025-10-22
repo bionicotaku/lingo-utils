@@ -80,7 +80,7 @@ func (c *retryingClient) UploadTraces(ctx context.Context, spans []*tracepb.Reso
 	for {
 		err := c.delegate.UploadTraces(ctx, spans)
 		if err == nil {
-			c.logger.logRecovery(len(spans), attempt, time.Since(start))
+			c.logger.logRecovery(spanCount(spans), attempt, time.Since(start))
 			return nil
 		}
 
@@ -132,7 +132,11 @@ func retryableStatus(s *status.Status) (bool, time.Duration) {
 		_, d := throttleDelay(s)
 		return true, d
 	case codes.ResourceExhausted:
-		return throttleDelay(s)
+		retryable, d := throttleDelay(s)
+		if !retryable {
+			return true, 0
+		}
+		return true, d
 	}
 	return false, 0
 }
@@ -176,4 +180,30 @@ func waitWithContext(ctx context.Context, delay time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+func spanCount(spans []*tracepb.ResourceSpans) int {
+	total := 0
+	for _, rs := range spans {
+		if rs == nil {
+			continue
+		}
+		for _, ss := range rs.ScopeSpans {
+			if ss == nil {
+				continue
+			}
+			total += len(ss.Spans)
+		}
+	}
+	return total
+}
+
+// TestingClassifyExportError 暴露导出错误分类逻辑，便于外部测试验证重试策略。
+func TestingClassifyExportError(err error) (bool, codes.Code, time.Duration) {
+	return classifyExportError(err)
+}
+
+// TestingSpanCount 暴露 span 计数逻辑，确保日志与实际导出数据一致。
+func TestingSpanCount(spans []*tracepb.ResourceSpans) int {
+	return spanCount(spans)
 }

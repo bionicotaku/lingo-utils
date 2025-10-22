@@ -89,7 +89,7 @@ func (l *exporterLogger) logRecovery(spanCount int, attempts int, elapsed time.D
 		"msg", "otel exporter recovered",
 		"attempts", attempts,
 		"duration", elapsed,
-		"spans", spanCount,
+		"span_count", spanCount,
 	}
 	if prevCode != codes.OK {
 		fields = append(fields, "last_grpc_code", prevCode.String())
