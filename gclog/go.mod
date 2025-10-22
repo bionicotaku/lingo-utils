@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/go-kratos/kratos/v2 v2.8.0
+	github.com/google/wire v0.7.0
 	github.com/stretchr/testify v1.9.0
 	go.opentelemetry.io/otel/trace v1.29.0
 )

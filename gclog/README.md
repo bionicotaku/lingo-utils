@@ -295,3 +295,8 @@ if err != nil {
 }
 // tenant_id 将作为 label 输出，workflow_state 会进入 jsonPayload 顶层。
 ```
+
+
+## Wire Provider
+
+`ProviderSet = wire.NewSet(NewComponent, ProvideLogger, ProvideHelper)` allows services to inject a trace-aware Kratos logger via Google Wire. Pass `gclog.Config` (service name/version/environment/instance) and reuse the returned cleanup (currently a no-op).
