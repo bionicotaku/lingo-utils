@@ -295,3 +295,9 @@ shutdown, err := observability.Init(ctx, cfg,
 - 仓库内集成示例：`INTEGRATION.md`
 
 欢迎在实际接入中根据需要扩展配置字段或提交改进建议。💕
+
+
+## Wire Provider
+
+- `ProviderSet` 暴露 `NewComponent` + `ProvideMetricsConfig`，可在服务 Wire 图中统一初始化 OpenTelemetry。
+- `NewComponent` 会自动调用 `Init` 并返回带 5s 超时清理的 `Component`，无需再手写 `defer`；直接把 `ObservabilityConfig`、`ServiceInfo`、`log.Logger` 注入即可。
