@@ -48,6 +48,8 @@ type MetricsConfig struct {
 	ResourceAttributes  map[string]string
 	DisableRuntimeStats bool
 	Required            bool
+	GRPCEnabled         bool
+	GRPCIncludeHealth   bool
 }
 
 // sanitize prepares configuration with sensible defaults without mutating original instance.
@@ -81,7 +83,7 @@ func (c ObservabilityConfig) sanitize() ObservabilityConfig {
 	}
 
 	if cfg.Metrics == nil {
-		cfg.Metrics = &MetricsConfig{}
+		cfg.Metrics = &MetricsConfig{GRPCEnabled: true}
 	} else {
 		mt := *cfg.Metrics
 		if mt.Exporter == "" {
@@ -90,6 +92,7 @@ func (c ObservabilityConfig) sanitize() ObservabilityConfig {
 		if mt.Interval <= 0 {
 			mt.Interval = 60 * time.Second
 		}
+		// bool fields retain caller-specified values; no defaults beyond zero.
 		cfg.Metrics = &mt
 	}
 

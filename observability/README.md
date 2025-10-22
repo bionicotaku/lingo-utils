@@ -251,7 +251,23 @@ observability/
 
 4. **指标与告警闭环**  
    - 订阅 `otelcol_exporter_send_failed_*`、`otelcol_exporter_queue_size` 等 Collector 指标，用于自动告警。  
-   - 在自定义 `ErrorHandler` 中维护连续失败计数，达到阈值时写入报警字段或触发内部事件；当 exporter 恢复成功时输出一条 `Info`，形成告警闭环。
+   - 在自定义 `ErrorHandler` 中维护连续失败计数，达到阈值时写入报警字段或触发内部事件；当 exporter 恢复成功时输出一条 `Info`，形成告警闭环。  
+   - 健康探针通常访问频繁，如需纳入指标，可在服务配置中将 `observability.metrics.grpc_include_health` 设为 `true`；默认 `false` 会过滤 `/grpc.health.v1.Health/Check` 调用，避免噪音；若需完全关闭 gRPC 指标，设置 `observability.metrics.grpc_enabled=false`。
+
+### 传播器约定
+
+库内部默认注册 `TraceContext + Baggage` 组合传播器，这是 OpenTelemetry 官方推荐的跨进程上下文标准；因此模板无需额外代码即可让 `observability/tracing` 中的 gRPC/HTTP 中间件透传 TraceID。如果需要兼容 Jaeger、B3 或自定义头部，可在服务入口显式传入新的组合：
+```go
+shutdown, err := observability.Init(ctx, cfg,
+    observability.WithLogger(logger),
+    observability.WithPropagator(propagation.NewCompositeTextMapPropagator(
+        propagation.TraceContext{},
+        propagation.Baggage{},
+        jaegerPropagation{},
+    )),
+)
+```
+在接入额外传播器时，请同步更新项目文档，确保上下游服务采用相同的头部协议。
 
 - **尽早初始化**：在服务入口配置加载后立即调用 `observability.Init`，确保后续组件（数据库、外部服务）也能获得 Trace 信息。
 - **统一命名**：使用一致的 `service.name`（如 `gateway`、`catalog`）与 `deployment.environment`（`dev/staging/prod`）方便跨服务聚合。
