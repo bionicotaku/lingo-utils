@@ -3,7 +3,6 @@ package observability
 import (
 	"context"
 	"errors"
-	"io"
 
 	"github.com/go-kratos/kratos/v2/log"
 	"go.opentelemetry.io/otel/propagation"
@@ -28,7 +27,7 @@ type initOptions struct {
 
 func defaultInitOptions() initOptions {
 	return initOptions{
-		logger:     log.NewStdLogger(io.Discard),
+		logger:     nil,
 		propagator: propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}),
 		attributes: map[string]string{},
 	}
@@ -94,6 +93,9 @@ func Init(ctx context.Context, cfg ObservabilityConfig, opts ...Option) (func(co
 	options := defaultInitOptions()
 	for _, opt := range opts {
 		opt(&options)
+	}
+	if options.logger == nil {
+		return nil, errors.New("observability: logger is required (use observability.WithLogger)")
 	}
 
 	res, err := buildResource(ctx, cfg, options)

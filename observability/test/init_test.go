@@ -49,6 +49,19 @@ func TestInitWithStdoutExporters(t *testing.T) {
 	})
 }
 
+func TestInitRequiresLogger(t *testing.T) {
+	cfg := obs.ObservabilityConfig{
+		Tracing: &obs.TracingConfig{
+			Enabled:  true,
+			Exporter: obs.ExporterStdout,
+		},
+	}
+
+	_, err := obs.Init(context.Background(), cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "logger is required")
+}
+
 func TestBuildResourceMergesAttributes(t *testing.T) {
 	cfg := obs.ObservabilityConfig{
 		Tracing: &obs.TracingConfig{

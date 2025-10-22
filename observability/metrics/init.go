@@ -40,6 +40,9 @@ func Init(ctx context.Context, cfg Config, opts ...Option) (func(context.Context
 	for _, opt := range opts {
 		opt(&options)
 	}
+	if options.logger == nil {
+		return nil, errors.New("metrics: logger is required (use metrics.WithLogger)")
+	}
 	if options.resource == nil {
 		options.resource = resource.Default()
 	}

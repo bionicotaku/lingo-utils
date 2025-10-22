@@ -184,13 +184,81 @@ observability/
 
 ## 最佳实践
 
+### 日志整合与错误处理
+
+1. **强制注入结构化 Logger**  
+   `observability.Init` 必须显式传入 `observability.WithLogger`，否则会直接返回错误。请将统一的 Kratos `log.Logger` 注入遥测组件，并追加固定字段，确保 Trace/Metrics 与业务日志共用同一条输出链路：
+   ```go
+   baseLogger := log.With(logger,
+       "component", "observability",
+       "service.name", serviceName,
+   )
+   shutdownObs, err := observability.Init(ctx, cfg.Observability,
+       observability.WithLogger(baseLogger),
+       observability.WithServiceName(serviceName),
+       observability.WithServiceVersion(version),
+       observability.WithEnvironment(env),
+   )
+   ```
+
+2. **自定义 `otel.ErrorHandler`，接管所有导出异常**  
+   OpenTelemetry SDK 默认把 exporter 错误直接写到 `stderr`。在初始化后立即注册自定义 Handler，把 SDK 抛出的所有错误转换为结构化日志（与 Kratos 等级体系一致）：
+   ```go
+   func installOTELErrorHandler(logger log.Logger) {
+       // 需 import "google.golang.org/grpc/codes" 与 "google.golang.org/grpc/status"。
+       helper := log.NewHelper(logger)
+       otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
+           st, ok := status.FromError(err)
+           if !ok {
+               helper.Errorw("msg", "otel exporter error", "error", err)
+               return
+           }
+           switch st.Code() {
+           case codes.Unavailable, codes.ResourceExhausted, codes.DeadlineExceeded:
+               helper.Warnw("msg", "otel exporter retrying",
+                   "error", err,
+                   "grpc_code", st.Code().String(),
+                   "retry_backoff", extractBackoff(err),
+               )
+           case codes.InvalidArgument, codes.PermissionDenied, codes.Unauthenticated:
+               helper.Errorw("msg", "otel exporter permanent failure",
+                   "error", err,
+                   "grpc_code", st.Code().String(),
+               )
+           default:
+               helper.Errorw("msg", "otel exporter unexpected error",
+                   "error", err,
+                   "grpc_code", st.Code().String(),
+               )
+           }
+       }))
+   }
+   ```
+   `extractBackoff` 可从错误消息或自行维护的上下文中解析出当前退避间隔，用于帮助运维判断恢复时间。
+
+3. **包装 OTLP 重试策略并输出退避状态**  
+   使用 `otlptracegrpc.WithRetry` 包装默认配置，在请求函数外围记录尝试次数、退避时长，并将其写入 Kratos 日志。建议在连续失败 N 次后发出额外的 `Error` 日志或 Prometheus 告警，同时在恢复成功时输出一条 `Info`：
+   ```go
+   retryCfg := otlptracegrpc.RetryConfig{
+       Enabled:         true,
+       InitialInterval: 5 * time.Second,
+       MaxInterval:     30 * time.Second,
+       MaxElapsedTime:  time.Minute,
+   }
+   clientOpt := otlptracegrpc.WithRetry(retryCfg)
+   // 在 observability/tracing 内部：对 retryCfg.RequestFunc 进行装饰，写入 helper.Warnw。
+   ```
+
+4. **指标与告警闭环**  
+   - 订阅 `otelcol_exporter_send_failed_*`、`otelcol_exporter_queue_size` 等 Collector 指标，用于自动告警。  
+   - 在自定义 `ErrorHandler` 中维护连续失败计数，达到阈值时写入报警字段或触发内部事件；当 exporter 恢复成功时输出一条 `Info`，形成告警闭环。
+
 - **尽早初始化**：在服务入口配置加载后立即调用 `observability.Init`，确保后续组件（数据库、外部服务）也能获得 Trace 信息。
 - **统一命名**：使用一致的 `service.name`（如 `gateway`、`catalog`）与 `deployment.environment`（`dev/staging/prod`）方便跨服务聚合。
 - **采样策略**：生产环境根据请求量调整 `SamplingRatio`；临时排障时可动态提高采样率，再恢复常规值。
 - **幂等性**：Tracing/Metrics 的 `Shutdown` 要在 `defer` 中调用，确保批量数据在退出前写出。
 - **日志关联**：若日志系统支持结构化输出，可通过 `kratos` 的 log middleware 注入 `trace_id`、`span_id`（Kratos tracing middleware 已提供 valuer）。
 - **最小权限**：仅授予服务账号所需权限；生产环境禁止 `Insecure=true`。
-
 ---
 
 ## Roadmap

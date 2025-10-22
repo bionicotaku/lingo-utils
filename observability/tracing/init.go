@@ -8,13 +8,11 @@ import (
 
 	"github.com/go-kratos/kratos/v2/log"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
-	"google.golang.org/grpc"
 )
 
 // Config holds tracing specific settings.
@@ -44,6 +42,9 @@ func Init(ctx context.Context, cfg Config, opts ...Option) (func(context.Context
 	for _, opt := range opts {
 		opt(&options)
 	}
+	if options.logger == nil {
+		return nil, errors.New("tracing: logger is required (use tracing.WithLogger)")
+	}
 
 	if options.resource == nil {
 		options.resource = resource.Default()
@@ -54,12 +55,14 @@ func Init(ctx context.Context, cfg Config, opts ...Option) (func(context.Context
 
 	cfg = sanitizeConfig(cfg)
 
-	exporter, err := newExporter(ctx, cfg)
+	telemetryLogger := newExporterLogger(options.logger)
+	exporter, err := newExporter(ctx, cfg, telemetryLogger)
 	if err != nil {
 		return nil, err
 	}
 
 	helper := log.NewHelper(options.logger)
+	otel.SetErrorHandler(newErrorHandler(telemetryLogger))
 
 	batcher := sdktrace.WithBatcher(exporter,
 		sdktrace.WithMaxQueueSize(cfg.MaxQueueSize),
@@ -106,7 +109,7 @@ func sanitizeConfig(cfg Config) Config {
 	return cfg
 }
 
-func newExporter(ctx context.Context, cfg Config) (sdktrace.SpanExporter, error) {
+func newExporter(ctx context.Context, cfg Config, logger *exporterLogger) (sdktrace.SpanExporter, error) {
 	switch cfg.Exporter {
 	case "otlp_grpc":
 		var clientOpts []otlptracegrpc.Option
@@ -122,9 +125,7 @@ func newExporter(ctx context.Context, cfg Config) (sdktrace.SpanExporter, error)
 		if cfg.ExportTimeout > 0 {
 			clientOpts = append(clientOpts, otlptracegrpc.WithTimeout(cfg.ExportTimeout))
 		}
-		//lint:ignore SA1019 保持初始化阶段阻塞直至 gRPC 连接握手完成；OTLP gRPC 客户端暂未提供替代方案。
-		clientOpts = append(clientOpts, otlptracegrpc.WithDialOption(grpc.WithBlock()))
-		return otlptracegrpc.New(ctx, clientOpts...)
+		return newRetryingExporter(ctx, defaultRetrySettings(), logger, clientOpts...)
 	case "stdout":
 		return stdouttrace.New(stdouttrace.WithPrettyPrint())
 	default:

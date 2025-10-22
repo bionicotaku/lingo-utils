@@ -2,8 +2,6 @@
 package tracing
 
 import (
-	"io"
-
 	"github.com/go-kratos/kratos/v2/log"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -20,7 +18,7 @@ type options struct {
 
 func defaultOptions() options {
 	return options{
-		logger:   log.NewStdLogger(io.Discard),
+		logger:   nil,
 		resource: nil,
 	}
 }
