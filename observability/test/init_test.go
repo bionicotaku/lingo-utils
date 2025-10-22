@@ -14,6 +14,10 @@ import (
 	nooptrace "go.opentelemetry.io/otel/trace/noop"
 )
 
+type stubHandler struct{}
+
+func (stubHandler) Handle(error) {}
+
 func TestInitWithStdoutExporters(t *testing.T) {
 	cfg := obs.ObservabilityConfig{
 		Tracing: &obs.TracingConfig{
@@ -60,6 +64,37 @@ func TestInitRequiresLogger(t *testing.T) {
 	_, err := obs.Init(context.Background(), cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "logger is required")
+}
+
+func TestShutdownRestoresErrorHandler(t *testing.T) {
+	cfg := obs.ObservabilityConfig{
+		Tracing: &obs.TracingConfig{
+			Enabled:  true,
+			Exporter: obs.ExporterStdout,
+		},
+	}
+
+	origHandler := otel.GetErrorHandler()
+	sentinel := &stubHandler{}
+	otel.SetErrorHandler(sentinel)
+	t.Cleanup(func() {
+		otel.SetErrorHandler(origHandler)
+	})
+
+	logger := log.NewStdLogger(testWriter{t})
+
+	shutdown, err := obs.Init(context.Background(), cfg,
+		obs.WithLogger(logger),
+		obs.WithServiceName("test-service"),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, shutdown)
+	require.NotEqual(t, sentinel, otel.GetErrorHandler())
+
+	require.NoError(t, shutdown(context.Background()))
+	require.Equal(t, sentinel, otel.GetErrorHandler())
+
+	otel.SetTracerProvider(nooptrace.NewTracerProvider())
 }
 
 func TestBuildResourceMergesAttributes(t *testing.T) {
