@@ -1,3 +1,4 @@
+// Package tracing 封装 OpenTelemetry TracerProvider 的初始化逻辑。
 package tracing
 
 import (

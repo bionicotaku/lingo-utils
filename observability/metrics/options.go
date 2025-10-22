@@ -1,3 +1,4 @@
+// Package metrics 封装 OpenTelemetry MeterProvider 的初始化逻辑。
 package metrics
 
 import (

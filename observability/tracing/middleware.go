@@ -86,7 +86,7 @@ func Server(opts ...ServerOption) middleware.Middleware {
 		return base
 	}
 
-	builder := selector.Server(base).Match(func(ctx context.Context, operation string) bool {
+	builder := selector.Server(base).Match(func(_ context.Context, operation string) bool {
 		return !cfg.skipper(operation)
 	})
 	return builder.Build()
@@ -161,7 +161,7 @@ func Client(opts ...ClientOption) middleware.Middleware {
 		return base
 	}
 
-	builder := selector.Client(base).Match(func(ctx context.Context, operation string) bool {
+	builder := selector.Client(base).Match(func(_ context.Context, operation string) bool {
 		return !cfg.skipper(operation)
 	})
 	return builder.Build()

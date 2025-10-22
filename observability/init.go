@@ -191,6 +191,18 @@ func Init(ctx context.Context, cfg ObservabilityConfig, opts ...Option) (func(co
 	}, nil
 }
 
+// BuildResource 根据传入配置与 Option 构建 OpenTelemetry resource，可用于自定义初始化流程。
+func BuildResource(ctx context.Context, cfg ObservabilityConfig, opts ...Option) (*resource.Resource, error) {
+	if ctx == nil {
+		return nil, errors.New("nil context")
+	}
+	options := defaultInitOptions()
+	for _, opt := range opts {
+		opt(&options)
+	}
+	return buildResource(ctx, cfg, options)
+}
+
 func mergeAttributes(src map[string]string, extra map[string]string) map[string]string {
 	if len(src) == 0 && len(extra) == 0 {
 		return nil

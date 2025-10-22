@@ -101,7 +101,7 @@ func sanitizeConfig(cfg Config) Config {
 		cfg.MaxQueueSize = 2048
 	}
 	if cfg.MaxExportBatchSize <= 0 || cfg.MaxExportBatchSize > cfg.MaxQueueSize {
-		cfg.MaxExportBatchSize = min(512, cfg.MaxQueueSize)
+		cfg.MaxExportBatchSize = minInt(512, cfg.MaxQueueSize)
 	}
 	return cfg
 }
@@ -122,6 +122,7 @@ func newExporter(ctx context.Context, cfg Config) (sdktrace.SpanExporter, error)
 		if cfg.ExportTimeout > 0 {
 			clientOpts = append(clientOpts, otlptracegrpc.WithTimeout(cfg.ExportTimeout))
 		}
+		//lint:ignore SA1019 保持初始化阶段阻塞直至 gRPC 连接握手完成；OTLP gRPC 客户端暂未提供替代方案。
 		clientOpts = append(clientOpts, otlptracegrpc.WithDialOption(grpc.WithBlock()))
 		return otlptracegrpc.New(ctx, clientOpts...)
 	case "stdout":
@@ -131,7 +132,7 @@ func newExporter(ctx context.Context, cfg Config) (sdktrace.SpanExporter, error)
 	}
 }
 
-func min(a, b int) int {
+func minInt(a, b int) int {
 	if a < b {
 		return a
 	}

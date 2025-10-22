@@ -1,3 +1,4 @@
+// Package gclog 提供针对 Google Cloud Logging 的 Kratos 日志适配器与辅助函数。
 package gclog
 
 import (

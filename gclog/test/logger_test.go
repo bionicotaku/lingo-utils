@@ -1,4 +1,4 @@
-package gclog
+package gclog_test
 
 import (
 	"bytes"
@@ -11,26 +11,27 @@ import (
 	"testing"
 	"time"
 
+	gclog "github.com/bionicotaku/lingo-utils/gclog"
 	"github.com/go-kratos/kratos/v2/log"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNewLoggerValidation(t *testing.T) {
-	_, err := NewLogger()
+	_, err := gclog.NewLogger()
 	require.Error(t, err)
 
-	_, err = NewLogger(WithService("svc"))
+	_, err = gclog.NewLogger(gclog.WithService("svc"))
 	require.Error(t, err)
 
-	logger, err := NewLogger(WithService("svc"), WithVersion("v1"))
+	logger, err := gclog.NewLogger(gclog.WithService("svc"), gclog.WithVersion("v1"))
 	require.NoError(t, err)
 	require.NotNil(t, logger)
 }
 
 func TestLoggerWritesExpectedJSON(t *testing.T) {
-	logger, buf, err := NewTestLogger(
-		WithService("catalog"),
-		WithVersion("2025.10.21"),
+	logger, buf, err := gclog.NewTestLogger(
+		gclog.WithService("catalog"),
+		gclog.WithVersion("2025.10.21"),
 	)
 	require.NoError(t, err)
 
@@ -58,7 +59,7 @@ func TestLoggerWritesExpectedJSON(t *testing.T) {
 }
 
 func TestPayloadTypeError(t *testing.T) {
-	logger, err := NewLogger(WithService("svc"), WithVersion("v1"))
+	logger, err := gclog.NewLogger(gclog.WithService("svc"), gclog.WithVersion("v1"))
 	require.NoError(t, err)
 
 	err = logger.Log(
@@ -70,14 +71,14 @@ func TestPayloadTypeError(t *testing.T) {
 }
 
 func TestWithTraceAndHelper(t *testing.T) {
-	logger, buf, err := NewTestLogger(
-		WithService("svc"),
-		WithVersion("v1"),
+	logger, buf, err := gclog.NewTestLogger(
+		gclog.WithService("svc"),
+		gclog.WithVersion("v1"),
 	)
 	require.NoError(t, err)
 
-	ctx := StubTraceContext(context.Background(), "1234abcd", "0011")
-	helper := NewHelper(WithTrace(ctx, logger)).WithCaller("component")
+	ctx := gclog.StubTraceContext(context.Background(), "1234abcd", "0011")
+	helper := gclog.NewHelper(gclog.WithTrace(ctx, logger)).WithCaller("component")
 	helper.InfoWithPayload("done", map[string]any{"status": "ok"})
 
 	entry := decodeEntry(t, buf.String())
@@ -86,7 +87,7 @@ func TestWithTraceAndHelper(t *testing.T) {
 }
 
 func TestLoggerRejectsUnsupportedKey(t *testing.T) {
-	logger, err := NewLogger(WithService("svc"), WithVersion("v1"))
+	logger, err := gclog.NewLogger(gclog.WithService("svc"), gclog.WithVersion("v1"))
 	require.NoError(t, err)
 
 	err = logger.Log(log.LevelInfo, "foo", "bar")
@@ -94,7 +95,7 @@ func TestLoggerRejectsUnsupportedKey(t *testing.T) {
 }
 
 func TestLoggerAcceptsKratosDefaultKeys(t *testing.T) {
-	logger, buf, err := NewTestLogger(WithService("svc"), WithVersion("v1"))
+	logger, buf, err := gclog.NewTestLogger(gclog.WithService("svc"), gclog.WithVersion("v1"))
 	require.NoError(t, err)
 
 	require.NoError(t, logger.Log(
@@ -125,10 +126,10 @@ func TestLoggerAcceptsKratosDefaultKeys(t *testing.T) {
 }
 
 func TestKratosLabelMergeWithCustomLabels(t *testing.T) {
-	logger, buf, err := NewTestLogger(WithService("svc"), WithVersion("v1"))
+	logger, buf, err := gclog.NewTestLogger(gclog.WithService("svc"), gclog.WithVersion("v1"))
 	require.NoError(t, err)
 
-	logger = WithLabels(logger, map[string]string{"team": "infra"})
+	logger = gclog.WithLabels(logger, map[string]string{"team": "infra"})
 
 	require.NoError(t, logger.Log(
 		log.LevelInfo,
@@ -147,10 +148,10 @@ func TestKratosLabelMergeWithCustomLabels(t *testing.T) {
 }
 
 func TestLoggerAllowsCustomKeys(t *testing.T) {
-	logger, buf, err := NewTestLogger(
-		WithService("svc"),
-		WithVersion("v1"),
-		WithAllowedKeys("extra"),
+	logger, buf, err := gclog.NewTestLogger(
+		gclog.WithService("svc"),
+		gclog.WithVersion("v1"),
+		gclog.WithAllowedKeys("extra"),
 	)
 	require.NoError(t, err)
 
@@ -167,7 +168,7 @@ func TestLoggerAllowsCustomKeys(t *testing.T) {
 }
 
 func TestWithMetadata(t *testing.T) {
-	logger, buf, err := NewTestLogger(WithService("svc"), WithVersion("v1"))
+	logger, buf, err := gclog.NewTestLogger(gclog.WithService("svc"), gclog.WithVersion("v1"))
 	require.NoError(t, err)
 
 	md := map[string][]string{
@@ -176,8 +177,8 @@ func TestWithMetadata(t *testing.T) {
 		"empty":        {},
 	}
 
-	logger = WithMetadata(logger, md)
-	logger = WithPayload(logger, map[string]any{"extra": "value"})
+	logger = gclog.WithMetadata(logger, md)
+	logger = gclog.WithPayload(logger, map[string]any{"extra": "value"})
 	require.NoError(t, logger.Log(log.LevelInfo, log.DefaultMessageKey, "meta"))
 
 	entry := decodeEntry(t, buf.String())
@@ -198,7 +199,7 @@ func TestMetadataToMap(t *testing.T) {
 		"empty":  {},
 	}
 
-	result := MetadataToMap(md)
+	result := gclog.MetadataToMap(md)
 	require.Equal(t, "one", result["single"])
 	require.ElementsMatch(t, []string{"a", "b"}, result["multi"].([]string))
 	_, ok := result["empty"]
@@ -206,10 +207,10 @@ func TestMetadataToMap(t *testing.T) {
 }
 
 func TestWithAllowedLabelKeys(t *testing.T) {
-	logger, buf, err := NewTestLogger(
-		WithService("svc"),
-		WithVersion("v1"),
-		WithAllowedLabelKeys("tenant"),
+	logger, buf, err := gclog.NewTestLogger(
+		gclog.WithService("svc"),
+		gclog.WithVersion("v1"),
+		gclog.WithAllowedLabelKeys("tenant"),
 	)
 	require.NoError(t, err)
 
@@ -225,10 +226,10 @@ func TestWithAllowedLabelKeys(t *testing.T) {
 }
 
 func TestInstanceIDLabels(t *testing.T) {
-	logger, buf, err := NewTestLogger(
-		WithService("svc"),
-		WithVersion("v1"),
-		WithInstanceID("instance-1"),
+	logger, buf, err := gclog.NewTestLogger(
+		gclog.WithService("svc"),
+		gclog.WithVersion("v1"),
+		gclog.WithInstanceID("instance-1"),
 	)
 	require.NoError(t, err)
 
@@ -241,10 +242,10 @@ func TestInstanceIDLabels(t *testing.T) {
 }
 
 func TestDisableInstanceID(t *testing.T) {
-	logger, buf, err := NewTestLogger(
-		WithService("svc"),
-		WithVersion("v1"),
-		DisableInstanceID(),
+	logger, buf, err := gclog.NewTestLogger(
+		gclog.WithService("svc"),
+		gclog.WithVersion("v1"),
+		gclog.DisableInstanceID(),
 	)
 	require.NoError(t, err)
 
@@ -255,26 +256,26 @@ func TestDisableInstanceID(t *testing.T) {
 }
 
 func TestSeverityFromHTTP(t *testing.T) {
-	require.Equal(t, log.LevelInfo, SeverityFromHTTP(http.StatusOK))
-	require.Equal(t, log.LevelWarn, SeverityFromHTTP(http.StatusBadRequest))
-	require.Equal(t, log.LevelError, SeverityFromHTTP(http.StatusInternalServerError))
+	require.Equal(t, log.LevelInfo, gclog.SeverityFromHTTP(http.StatusOK))
+	require.Equal(t, log.LevelWarn, gclog.SeverityFromHTTP(http.StatusBadRequest))
+	require.Equal(t, log.LevelError, gclog.SeverityFromHTTP(http.StatusInternalServerError))
 }
 
 func TestAppendTrace(t *testing.T) {
-	ctx := StubTraceContext(context.Background(), "abcd1234abcd1234abcd1234abcd1234", "1234abcd1234abcd")
-	kvs := AppendTrace(ctx, nil)
+	ctx := gclog.StubTraceContext(context.Background(), "abcd1234abcd1234abcd1234abcd1234", "1234abcd1234abcd")
+	kvs := gclog.AppendTrace(ctx, nil)
 	require.Len(t, kvs, 4)
-	require.Equal(t, traceKey, kvs[0])
+	require.Equal(t, "trace_id", kvs[0])
 	require.Equal(t, "abcd1234abcd1234abcd1234abcd1234", kvs[1])
-	require.Equal(t, spanKey, kvs[2])
+	require.Equal(t, "span_id", kvs[2])
 	require.Equal(t, "1234abcd1234abcd", kvs[3])
 }
 
 func TestHelperWithPayload(t *testing.T) {
-	logger, buf, err := NewTestLogger(WithService("svc"), WithVersion("v1"))
+	logger, buf, err := gclog.NewTestLogger(gclog.WithService("svc"), gclog.WithVersion("v1"))
 	require.NoError(t, err)
 
-	helper := NewHelper(logger).WithCaller("catalog").WithPayload(map[string]any{"k": "v"})
+	helper := gclog.NewHelper(logger).WithCaller("catalog").WithPayload(map[string]any{"k": "v"})
 	helper.InfoWithPayload("hello", map[string]any{"id": 1})
 
 	entry := decodeEntry(t, buf.String())
@@ -286,12 +287,12 @@ func TestHelperWithPayload(t *testing.T) {
 }
 
 func TestPayloadMerge(t *testing.T) {
-	logger, buf, err := NewTestLogger(WithService("svc"), WithVersion("v1"))
+	logger, buf, err := gclog.NewTestLogger(gclog.WithService("svc"), gclog.WithVersion("v1"))
 	require.NoError(t, err)
 
-	logger = WithPayload(logger, map[string]any{"a": 1})
-	logger = WithStatus(logger, "ok")
-	logger = WithPayload(logger, map[string]any{"b": 2})
+	logger = gclog.WithPayload(logger, map[string]any{"a": 1})
+	logger = gclog.WithStatus(logger, "ok")
+	logger = gclog.WithPayload(logger, map[string]any{"b": 2})
 
 	require.NoError(t, logger.Log(log.LevelInfo, log.DefaultMessageKey, "msg"))
 
@@ -304,7 +305,7 @@ func TestPayloadMerge(t *testing.T) {
 
 func TestConcurrentWrites(t *testing.T) {
 	buf := &bytes.Buffer{}
-	logger, err := NewLogger(WithService("svc"), WithVersion("v1"), WithWriter(buf))
+	logger, err := gclog.NewLogger(gclog.WithService("svc"), gclog.WithVersion("v1"), gclog.WithWriter(buf))
 	require.NoError(t, err)
 
 	const n = 50
@@ -323,21 +324,21 @@ func TestConcurrentWrites(t *testing.T) {
 }
 
 func TestWithHTTPRequest(t *testing.T) {
-	logger, buf, err := NewTestLogger(WithService("svc"), WithVersion("v1"))
+	logger, buf, err := gclog.NewTestLogger(gclog.WithService("svc"), gclog.WithVersion("v1"))
 	require.NoError(t, err)
 
 	req, _ := http.NewRequest(http.MethodGet, "https://example.com/foo?bar=baz", nil)
 	req.Header.Set("User-Agent", "test-agent")
 	req.RemoteAddr = "127.0.0.1:12345"
 
-	logger = WithHTTPRequest(
+	logger = gclog.WithHTTPRequest(
 		logger,
 		req,
 		200,
 		150*time.Millisecond,
-		HTTPRequestResponseSize(512),
-		HTTPRequestServerIP("10.0.0.1"),
-		HTTPRequestCacheStatus(true, true, false),
+		gclog.HTTPRequestResponseSize(512),
+		gclog.HTTPRequestServerIP("10.0.0.1"),
+		gclog.HTTPRequestCacheStatus(true, true, false),
 	)
 	require.NoError(t, logger.Log(log.LevelInfo, log.DefaultMessageKey, "http req"))
 
@@ -357,10 +358,10 @@ func TestWithHTTPRequest(t *testing.T) {
 }
 
 func TestLabelsHelpers(t *testing.T) {
-	logger, buf, err := NewTestLogger(WithService("svc"), WithVersion("v1"))
+	logger, buf, err := gclog.NewTestLogger(gclog.WithService("svc"), gclog.WithVersion("v1"))
 	require.NoError(t, err)
 
-	logger = WithLabels(logger, map[string]string{
+	logger = gclog.WithLabels(logger, map[string]string{
 		"request_id": "req-123",
 		"user_id":    "user-456",
 		"team":       "growth",
@@ -375,7 +376,7 @@ func TestLabelsHelpers(t *testing.T) {
 }
 
 func TestSourceLocationEnabled(t *testing.T) {
-	logger, buf, err := NewTestLogger(WithService("svc"), WithVersion("v1"), EnableSourceLocation())
+	logger, buf, err := gclog.NewTestLogger(gclog.WithService("svc"), gclog.WithVersion("v1"), gclog.EnableSourceLocation())
 	require.NoError(t, err)
 
 	require.NoError(t, logger.Log(log.LevelInfo, log.DefaultMessageKey, "msg"))
@@ -388,10 +389,10 @@ func TestSourceLocationEnabled(t *testing.T) {
 }
 
 func TestWithErrorHelper(t *testing.T) {
-	logger, buf, err := NewTestLogger(WithService("svc"), WithVersion("v1"))
+	logger, buf, err := gclog.NewTestLogger(gclog.WithService("svc"), gclog.WithVersion("v1"))
 	require.NoError(t, err)
 
-	logger = WithError(logger, fmt.Errorf("boom"))
+	logger = gclog.WithError(logger, fmt.Errorf("boom"))
 	require.NoError(t, logger.Log(log.LevelError, log.DefaultMessageKey, "failed"))
 
 	entry := decodeEntry(t, buf.String())
@@ -400,10 +401,10 @@ func TestWithErrorHelper(t *testing.T) {
 }
 
 func TestJSONPayloadWithoutPayloadOrError(t *testing.T) {
-	logger, buf, err := NewTestLogger(
-		WithService("svc"),
-		WithVersion("v1"),
-		WithAllowedKeys("debug_id"),
+	logger, buf, err := gclog.NewTestLogger(
+		gclog.WithService("svc"),
+		gclog.WithVersion("v1"),
+		gclog.WithAllowedKeys("debug_id"),
 	)
 	require.NoError(t, err)
 

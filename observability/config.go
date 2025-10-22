@@ -1,3 +1,4 @@
+// Package observability 提供统一的 OpenTelemetry tracing 与 metrics 初始化入口。
 package observability
 
 import "time"
@@ -9,6 +10,8 @@ const (
 )
 
 // ObservabilityConfig aggregates tracing and metrics configuration.
+//
+//revive:disable-next-line:exported
 type ObservabilityConfig struct {
 	Tracing          *TracingConfig
 	Metrics          *MetricsConfig
