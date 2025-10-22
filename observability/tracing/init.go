@@ -55,21 +55,21 @@ func Init(ctx context.Context, cfg Config, opts ...Option) (func(context.Context
 
 	cfg = sanitizeConfig(cfg)
 
-		telemetryLogger := newExporterLogger(options.logger)
-		exporter, err := newExporter(ctx, cfg, telemetryLogger)
-		if err != nil {
-			return nil, err
-		}
+	telemetryLogger := newExporterLogger(options.logger)
+	exporter, err := newExporter(ctx, cfg, telemetryLogger)
+	if err != nil {
+		return nil, err
+	}
 
-		helper := log.NewHelper(options.logger)
-		prevHandler := otel.GetErrorHandler()
-		handler := newErrorHandler(telemetryLogger)
-		otel.SetErrorHandler(handler)
+	helper := log.NewHelper(options.logger)
+	prevHandler := otel.GetErrorHandler()
+	handler := newErrorHandler(telemetryLogger)
+	otel.SetErrorHandler(handler)
 
-		batcher := sdktrace.WithBatcher(exporter,
-			sdktrace.WithMaxQueueSize(cfg.MaxQueueSize),
-			sdktrace.WithMaxExportBatchSize(cfg.MaxExportBatchSize),
-			sdktrace.WithBatchTimeout(cfg.BatchTimeout),
+	batcher := sdktrace.WithBatcher(exporter,
+		sdktrace.WithMaxQueueSize(cfg.MaxQueueSize),
+		sdktrace.WithMaxExportBatchSize(cfg.MaxExportBatchSize),
+		sdktrace.WithBatchTimeout(cfg.BatchTimeout),
 		sdktrace.WithExportTimeout(cfg.ExportTimeout),
 	)
 
@@ -82,16 +82,16 @@ func Init(ctx context.Context, cfg Config, opts ...Option) (func(context.Context
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(options.propagator)
 
-		helper.Infof("tracing initialized exporter=%s endpoint=%s", cfg.Exporter, cfg.Endpoint)
-		return func(ctx context.Context) error {
-			helper.Info("shutting down tracing provider")
-			err := tp.Shutdown(ctx)
-			if otel.GetErrorHandler() == handler {
-				otel.SetErrorHandler(prevHandler)
-			}
-			return err
-		}, nil
-	}
+	helper.Infof("tracing initialized exporter=%s endpoint=%s", cfg.Exporter, cfg.Endpoint)
+	return func(ctx context.Context) error {
+		helper.Info("shutting down tracing provider")
+		err := tp.Shutdown(ctx)
+		if otel.GetErrorHandler() == handler {
+			otel.SetErrorHandler(prevHandler)
+		}
+		return err
+	}, nil
+}
 
 func sanitizeConfig(cfg Config) Config {
 	if cfg.Exporter == "" {
