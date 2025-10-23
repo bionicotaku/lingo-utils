@@ -127,9 +127,14 @@ type ServerConfig struct {
     Required         bool
     HeaderKey        string
 }
+
+type Config struct {
+    Client *ClientConfig
+    Server *ServerConfig
+}
 ```
 
-`Validate()` 会确保在启用模式下必填字段存在。
+`Validate()` 会确保在启用模式下必填字段存在；`Config` 用于一次性传入客户端/服务端配置，方便 `NewComponent` 构建中间件。
 
 ### 示例 YAML
 
@@ -156,12 +161,19 @@ import (
 )
 
 var ProviderSet = wire.NewSet(
-    gcjwt.ProviderSet,
-    // ...其他 provider
+    configloader.ProviderSet,   // 负责生成 gcjwt.Config
+    gcjwt.ProviderSet,          // 构造 JWT 组件并暴露中间件
+    grpcserver.ProviderSet,     // 在 gRPC Server 中挂载 ServerMiddleware
 )
 ```
 
-`ProvideClientMiddleware`/`ProvideServerMiddleware` 会读取配置、构造中间件，遇到非法配置会 panic，确保启动期即暴露问题。
+`gcjwt.ProviderSet` 现在输出：
+
+- `*gcjwt.Component`：聚合客户端/服务端中间件；
+- `gcjwt.ClientMiddleware`、`gcjwt.ServerMiddleware`：若配置缺失则为 `nil`；
+- `error` 会在 Wire 生成代码中显式返回，保持与其他组件一致的错误处理流程。
+
+若服务无需出站调用，可仅在 gRPC Server 构造函数中注入 `gcjwt.ServerMiddleware`，未启用一侧不必额外配置。
 
 ---
 

@@ -32,3 +32,14 @@ func (c *ServerConfig) Validate() error {
 	}
 	return nil
 }
+
+// Config 汇总客户端与服务端配置，便于统一注入。
+type Config struct {
+	Client *ClientConfig
+	Server *ServerConfig
+}
+
+// IsZero 判断配置是否为空。
+func (c Config) IsZero() bool {
+	return c.Client == nil && c.Server == nil
+}
