@@ -1,0 +1,70 @@
+# Binaries
+/build/
+/bin/
+*.exe
+*.exe~
+*.dll
+*.dylib
+*.o
+*.a
+*.so
+
+# Test artifacts
+*.test
+*.out
+coverage.*
+
+# Environment/configuration
+.env*
+!.env*.example
+configs/*.local.yaml
+configs/*.secret.yaml
+configs/*.production.yaml
+!configs/config.yaml
+!configs/config.*.yaml
+*.cert
+*.key
+*.pem
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs & temp
+*.log
+/tmp/
+*.tmp
+
+# Go specific
+go.work
+go.work.sum
+
+# Dependencies
+/vendor/
+
+# Generated code
+*.gw.go
+
+# Build profiles
+*.prof
+*.trace
+
+# Cloud credentials (should not commit)
+*-service-account.json
+*.key.json
+credentials.json
+
+# OS General
+.DS_Store
+Thumbs.db
+
+# Tool caches
+**/.gocache/
+**/.staticcheck/
+**/.gomodcache/
+**/.gotmp/
+**/.DS_Store/
+**/tmp/
