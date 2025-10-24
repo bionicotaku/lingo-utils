@@ -9,7 +9,6 @@ import (
 	"github.com/go-kratos/kratos/v2/log"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -25,47 +24,36 @@ type managerImpl struct {
 	pool    *pgxpool.Pool
 	cfg     Config
 	presets TxOptionPreset
-	opts    managerOptions
+	deps    managerDeps
 	metrics *telemetry
 	helper  *log.Helper
 	tracer  trace.Tracer
 }
 
 // NewManager constructs a transaction manager backed by the provided pgx pool.
-func NewManager(pool *pgxpool.Pool, cfg Config, options ...Option) (Manager, error) {
+func NewManager(pool *pgxpool.Pool, cfg Config, deps Dependencies) (Manager, error) {
 	if pool == nil {
 		return nil, errors.New("txmanager: pool is required")
 	}
 
 	sanitized := cfg.sanitized()
-	mgrOpts := defaultManagerOptions()
-	for _, opt := range options {
-		opt(&mgrOpts)
-	}
-
-	if mgrOpts.meter == nil {
-		mgrOpts.meter = otel.GetMeterProvider().Meter(sanitized.MeterName)
-	}
-	if mgrOpts.tracer == nil {
-		mgrOpts.tracer = otel.Tracer(sanitized.MeterName)
-	}
-
-	helper := log.NewHelper(mgrOpts.logger)
+	depValues := sanitizeDependencies(sanitized, deps)
+	helper := log.NewHelper(depValues.logger)
 
 	metricsEnabled := sanitized.metricsEnabledValue()
-	if mgrOpts.metricsEnabledOverride != nil {
-		metricsEnabled = *mgrOpts.metricsEnabledOverride
+	if depValues.metricsEnabledOverride != nil {
+		metricsEnabled = *depValues.metricsEnabledOverride
 	}
-	telemetry := newTelemetry(mgrOpts.meter, helper, metricsEnabled)
+	telemetry := newTelemetry(depValues.meter, helper, metricsEnabled)
 
 	m := &managerImpl{
 		pool:    pool,
 		cfg:     sanitized,
 		presets: sanitized.BuildPresets(),
-		opts:    mgrOpts,
+		deps:    depValues,
 		metrics: telemetry,
 		helper:  helper,
-		tracer:  mgrOpts.tracer,
+		tracer:  depValues.tracer,
 	}
 	return m, nil
 }
@@ -101,7 +89,7 @@ func (m *managerImpl) exec(ctx context.Context, opts TxOptions, fn func(context.
 	isolation := isoString(opts.Isolation)
 	span.SetAttributes(attribute.String("db.system", "postgresql"), attribute.String("db.tx.isolation", isolation), attribute.String("db.tx.method", method))
 
-	start := m.opts.clock()
+	start := m.deps.clock()
 	m.metrics.recordStart(ctx, method, isolation)
 
 	var tx pgx.Tx
@@ -214,6 +202,5 @@ func isoString(level pgx.TxIsoLevel) string {
 }
 
 func (m *managerImpl) elapsedSince(start time.Time) time.Duration {
-	now := m.opts.clock()
-	return now.Sub(start)
+	return m.deps.clock().Sub(start)
 }

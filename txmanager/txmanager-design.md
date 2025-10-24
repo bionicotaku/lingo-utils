@@ -24,7 +24,7 @@ TxManager 作为共享能力封装在 `lingo-utils/txmanager` 模块中，通过
 lingo-utils/txmanager/
   ├── component.go       # Config → Component → ProviderSet
   ├── manager.go         # Manager/Session 接口与实现（WithinTx/WithinReadOnlyTx）
-  ├── options.go         # Option、TxOptions、默认配置
+  ├── dependencies.go    # Dependencies、TxOptions 默认协作者
   ├── metrics.go         # OTel 指标埋点
   ├── errors.go          # ErrRetryableTx 等哨兵错误
   └── README.md          # 使用示例与 Wire 集成
@@ -61,7 +61,7 @@ type Config struct {
 ```
 
 - `config_loader` 负责从服务配置映射成 `Config`，结合 Supabase 环境变量生成默认值。
-- 在 `txmanager` 组件内部，可通过 `Option` 注入覆盖：日志、Meter、Tracer、Clock 等。
+- 在 `txmanager` 组件内部，通过 `Dependencies` 结构注入日志、Meter、Tracer、Clock 等协作者；缺省值由组件自动提供。
 
 ### 3.2 ProviderSet
 
@@ -73,7 +73,7 @@ var ProviderSet = wire.NewSet(
 )
 ```
 
-- `NewComponent(cfg Config, pool *pgxpool.Pool, logger log.Logger, opts ...Option)` 负责构造 `managerImpl`。
+- `NewComponent(cfg Config, pool *pgxpool.Pool, logger log.Logger)` 负责构造 `managerImpl`。
 - 组件默认从 `otel.GetMeterProvider()` 获取 Meter；当 `observability` 未启用时回退到 no-op。
 - `ProvideManager` 将 `Component.Manager` 暴露给 Service 层，类型为接口以便测试替换。
 
@@ -234,7 +234,7 @@ data:
 
 ## 12. 迁移步骤
 
-1. 在 `lingo-utils/txmanager` 中实现组件、Option、指标，遵循组件模式。  
+1. 在 `lingo-utils/txmanager` 中实现组件、Dependencies、指标，遵循组件模式。  
 2. 更新各服务 `go.work` / `go.mod`，引用新模块并在 Wire 中引入 `txmanager.ProviderSet`。  
 3. 调整 Repository 签名，确保写操作接收 `txmanager.Session`，只读查询按需走 `WithinReadOnlyTx`。  
 4. Service 落地 `WithinTx` / `WithinReadOnlyTx` 模式，先覆盖 catalog 核心用例。  

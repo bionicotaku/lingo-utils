@@ -59,15 +59,19 @@ data:
       metricsEnabled: true
 ```
 
-## Options
+## Customising Dependencies
 
-| Option | Description |
-| ------ | ----------- |
-| `WithLogger(log.Logger)` | Override the logger used for transaction lifecycle logs. |
-| `WithMeter(metric.Meter)` | Inject a preconfigured meter (default uses global provider). |
-| `WithTracer(trace.Tracer)` | Inject a tracer; defaults to global provider. |
-| `WithClock(func() time.Time)` | Deterministic time source for tests. |
-| `WithMetricsEnabled(bool)` | Force metrics on/off regardless of configuration. |
+`NewManager` accepts a `txmanager.Dependencies` struct for advanced overrides
+(custom tracer/meter/clock或强制关闭指标)。常规服务通过组件自动注入，**无需**手动设置；
+在测试中可直接调用：
+
+```go
+import "time"
+
+fakeClock := func() time.Time { return fixed }
+deps := txmanager.Dependencies{Clock: fakeClock}
+m, err := txmanager.NewManager(pool, cfg, deps)
+```
 
 ## Metrics Reference
 
@@ -89,7 +93,7 @@ data:
 
 ## Testing Tips
 
-- Inject a deterministic clock via `WithClock` to assert metrics values.
+- Inject a deterministic clock via `Dependencies{Clock: fakeNow}` to assert metrics values.
 - Use `pgxmock` or Testcontainers with Supabase configuration to exercise
   deadlock/serialization retry paths.
 - Validate metrics output using the `observability` stdout exporter in local
