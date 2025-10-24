@@ -149,7 +149,7 @@ var ProviderSet = wire.NewSet(NewComponent, ProvideMetricsConfig)
    - [x] 编写 `README.md`，包含配置示例、Wire 集成、Service/Repository 使用示例。
 
 2. 配置与注入  
-   - [ ] 更新 `kratos-template/internal/infrastructure/config_loader`，映射 `txmanager.Config`（默认超时、隔离级别、锁超时、指标开关）。  
+   - [x] 更新 `kratos-template/internal/infrastructure/config_loader`，映射 `txmanager.Config`（默认超时、隔离级别、锁超时、指标开关）。  
    - [ ] 在各服务 Wire 中引入 `txmanager.ProviderSet`，确保 `gclog`、`observability`、`pgxpool` Provider 在其前。  
    - [ ] 调整服务启动流程，注册 `txmanager` cleanup。
 

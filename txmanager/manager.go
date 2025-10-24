@@ -37,22 +37,22 @@ func NewManager(pool *pgxpool.Pool, cfg Config, options ...Option) (Manager, err
 		return nil, errors.New("txmanager: pool is required")
 	}
 
-	cfg = cfg.sanitized()
+	sanitized := cfg.sanitized()
 	mgrOpts := defaultManagerOptions()
 	for _, opt := range options {
 		opt(&mgrOpts)
 	}
 
 	if mgrOpts.meter == nil {
-		mgrOpts.meter = otel.GetMeterProvider().Meter(cfg.MeterName)
+		mgrOpts.meter = otel.GetMeterProvider().Meter(sanitized.MeterName)
 	}
 	if mgrOpts.tracer == nil {
-		mgrOpts.tracer = otel.Tracer(cfg.MeterName)
+		mgrOpts.tracer = otel.Tracer(sanitized.MeterName)
 	}
 
 	helper := log.NewHelper(mgrOpts.logger)
 
-	metricsEnabled := cfg.MetricsEnabled
+	metricsEnabled := sanitized.metricsEnabledValue()
 	if mgrOpts.metricsEnabledOverride != nil {
 		metricsEnabled = *mgrOpts.metricsEnabledOverride
 	}
@@ -60,8 +60,8 @@ func NewManager(pool *pgxpool.Pool, cfg Config, options ...Option) (Manager, err
 
 	m := &managerImpl{
 		pool:    pool,
-		cfg:     cfg,
-		presets: cfg.BuildPresets(),
+		cfg:     sanitized,
+		presets: sanitized.BuildPresets(),
 		opts:    mgrOpts,
 		metrics: telemetry,
 		helper:  helper,

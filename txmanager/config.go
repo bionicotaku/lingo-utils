@@ -11,29 +11,37 @@ type Config struct {
 	LockTimeout      time.Duration `json:"lockTimeout" yaml:"lockTimeout"`
 	MaxRetries       int           `json:"maxRetries" yaml:"maxRetries"`
 	MeterName        string        `json:"meterName" yaml:"meterName"`
-	MetricsEnabled   bool          `json:"metricsEnabled" yaml:"metricsEnabled"`
+	MetricsEnabled   *bool         `json:"metricsEnabled" yaml:"metricsEnabled"`
 }
 
 func (c Config) sanitized() Config {
-	if c.DefaultIsolation == "" {
-		c.DefaultIsolation = "read_committed"
+	s := c
+	if s.DefaultIsolation == "" {
+		s.DefaultIsolation = "read_committed"
 	}
-	if c.DefaultTimeout <= 0 {
-		c.DefaultTimeout = 3 * time.Second
+	if s.DefaultTimeout <= 0 {
+		s.DefaultTimeout = 3 * time.Second
 	}
-	if c.LockTimeout < 0 {
-		c.LockTimeout = 0
+	if s.LockTimeout < 0 {
+		s.LockTimeout = 0
 	}
-	if c.MeterName == "" {
-		c.MeterName = defaultMeterName
+	if s.MeterName == "" {
+		s.MeterName = defaultMeterName
 	}
-	if c.MaxRetries < 0 {
-		c.MaxRetries = 0
+	if s.MaxRetries < 0 {
+		s.MaxRetries = 0
 	}
-	if !c.MetricsEnabled {
-		c.MetricsEnabled = true
+	if s.MetricsEnabled == nil {
+		s.MetricsEnabled = boolPtr(true)
 	}
-	return c
+	return s
+}
+
+func (c Config) metricsEnabledValue() bool {
+	if c.MetricsEnabled == nil {
+		return true
+	}
+	return *c.MetricsEnabled
 }
 
 // TxOptionPreset groups the most commonly used transaction presets derived from
@@ -65,4 +73,9 @@ func (c Config) BuildPresets() TxOptionPreset {
 		Serializable: serializable,
 		ReadOnly:     readOnly,
 	}
+}
+
+func boolPtr(b bool) *bool {
+	v := b
+	return &v
 }
