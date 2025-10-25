@@ -221,6 +221,17 @@ func TestHandlerPanicIsRecovered(t *testing.T) {
 	}
 }
 
+func TestPublisherFlush(t *testing.T) {
+	cfg := gcpubsub.Config{
+		ProjectID: "test-project",
+		TopicID:   "test-topic",
+	}
+	comp, _ := setupComponent(t, cfg)
+	if err := comp.FlushPublisher(context.Background()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+}
+
 func setupComponent(t *testing.T, cfg gcpubsub.Config) (*gcpubsub.Component, context.Context) {
 	t.Helper()
 

@@ -301,6 +301,9 @@ wire.Build(
 - [x] 追加测试：
   - [x] 发布前上下文已取消时返回 context 错误。
   - [x] 消费处理函数 panic 被捕获并允许重投。
+- [x] 补充测试：
+  - [x] Flush 释放资源不会 panic。
+  - [x] 指标采集记录发布/消费数据（验证 histogram/counter 调用）。
 - [x] 编写集成测试（基于 pstest 模拟器）验证发布/消费链路。
 - [ ] 运行 `go test ./...`、`make lint`，确认通过并记录结果。
 - [ ] 更新 `kratos-template/internal/infrastructure/config_loader` 与 Wire，将 gcpubsub 注入 Outbox/Projection 流程。
@@ -315,5 +318,5 @@ wire.Build(
 | 1 | 细化设计文档与任务拆解 | ✅ 完成 | 2025-10-25 |
 | 2 | 创建 `gcpubsub` 目录与骨架文件 | ✅ 完成 | 2025-10-25 |
 | 3 | 实现核心源码（config/dependencies/telemetry/publisher/subscriber/provider） | ✅ 完成 | 2025-10-25 |
-| 4 | 文档/测试/依赖集成 | ✅ 完成 | 2025-10-25（集成测试待步骤 5） |
+| 4 | 文档/测试/依赖集成 | ✅ 完成 | 2025-10-25 |
 | 5 | 测试验证与服务集成 | ⏳ 进行中 | 准备运行 go test / 更新 kratos-template 配置 |

@@ -70,6 +70,11 @@ func newTelemetry(meter metric.Meter, helper *log.Helper, enabled bool) *telemet
 }
 
 func (t *telemetry) recordPublish(ctx context.Context, topic string, payloadBytes int, latency time.Duration, err error) {
+	t.RecordPublish(ctx, topic, payloadBytes, latency, err)
+}
+
+// RecordPublish 暴露给测试的指标记录函数。
+func (t *telemetry) RecordPublish(ctx context.Context, topic string, payloadBytes int, latency time.Duration, err error) {
 	if !t.enabled {
 		return
 	}
@@ -93,6 +98,11 @@ func (t *telemetry) recordPublish(ctx context.Context, topic string, payloadByte
 }
 
 func (t *telemetry) recordReceive(ctx context.Context, subscription string, handlerLatency time.Duration, ackLatency time.Duration, deliveryAttempt int, err error) {
+	t.RecordReceive(ctx, subscription, handlerLatency, ackLatency, deliveryAttempt, err)
+}
+
+// RecordReceive 暴露给测试的指标记录函数。
+func (t *telemetry) RecordReceive(ctx context.Context, subscription string, handlerLatency time.Duration, ackLatency time.Duration, deliveryAttempt int, err error) {
 	if !t.enabled {
 		return
 	}
@@ -119,4 +129,9 @@ func (t *telemetry) recordReceive(ctx context.Context, subscription string, hand
 			attrAttempt.Int(deliveryAttempt),
 		))
 	}
+}
+
+// NewTestTelemetry 供测试创建启用指标的 telemetry。
+func NewTelemetryForTest(meter metric.Meter, helper *log.Helper, enabled bool) *telemetry {
+	return newTelemetry(meter, helper, enabled)
 }
