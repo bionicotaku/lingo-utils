@@ -3,6 +3,7 @@ package txmanager_test
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"testing"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 // TestNewManager_NilPool 验证必须提供连接池
@@ -292,6 +295,69 @@ func TestWithinTx_CustomTraceName(t *testing.T) {
 	})
 
 	assert.NoError(t, err)
+}
+
+func TestWithinTx_RecordsMetrics(t *testing.T) {
+	if testing.Short() {
+		t.Skip("跳过需要数据库连接的测试")
+	}
+
+	pool := setupTestPool(t)
+	defer pool.Close()
+
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+
+	enabled := true
+	cfg := txmanager.Config{MetricsEnabled: &enabled}
+	deps := txmanager.Dependencies{
+		Logger: log.NewStdLogger(io.Discard),
+		Meter:  provider.Meter("txmanager-metrics-test"),
+	}
+
+	mgr, err := txmanager.NewManager(pool, cfg, deps)
+	require.NoError(t, err)
+
+	// 成功事务
+	err = mgr.WithinTx(context.Background(), txmanager.TxOptions{}, func(ctx context.Context, sess txmanager.Session) error {
+		_, execErr := sess.Tx().Exec(ctx, "SELECT 1")
+		return execErr
+	})
+	require.NoError(t, err)
+
+	// 失败事务，触发 failure 指标
+	_ = mgr.WithinTx(context.Background(), txmanager.TxOptions{}, func(ctx context.Context, sess txmanager.Session) error {
+		return errors.New("forced failure")
+	})
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+
+	foundDuration := false
+	foundActive := false
+	foundFailures := false
+
+	for _, scope := range rm.ScopeMetrics {
+		for _, metric := range scope.Metrics {
+			switch data := metric.Data.(type) {
+			case metricdata.Histogram[float64]:
+				if metric.Name == "db.tx.duration" && len(data.DataPoints) > 0 {
+					foundDuration = true
+				}
+			case metricdata.Sum[int64]:
+				if metric.Name == "db.tx.active" && len(data.DataPoints) > 0 {
+					foundActive = true
+				}
+				if metric.Name == "db.tx.failures" && len(data.DataPoints) > 0 {
+					foundFailures = true
+				}
+			}
+		}
+	}
+
+	require.True(t, foundDuration, "应记录 db.tx.duration 指标")
+	require.True(t, foundActive, "应记录 db.tx.active 指标")
+	require.True(t, foundFailures, "应记录 db.tx.failures 指标")
 }
 
 // setupTestPool 创建测试用的连接池
