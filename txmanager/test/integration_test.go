@@ -5,10 +5,15 @@
 package txmanager_test
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/bionicotaku/lingo-utils/txmanager"
@@ -255,8 +260,16 @@ func TestIntegration_LockTimeout(t *testing.T) {
 }
 
 // setupIntegrationDB 设置集成测试数据库
+var loadEnvOnce sync.Once
+
 func setupIntegrationDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
+
+	loadEnvOnce.Do(func() {
+		if err := loadTestDotEnv(); err != nil {
+			t.Logf("加载 .env 失败（忽略）：%v", err)
+		}
+	})
 
 	dbURL := os.Getenv("TEST_DATABASE_URL")
 	if dbURL == "" {
@@ -264,15 +277,57 @@ func setupIntegrationDB(t *testing.T) *pgxpool.Pool {
 	}
 
 	pool, err := pgxpool.New(context.Background(), dbURL)
-	require.NoError(t, err, "无法连接到测试数据库，请设置 TEST_DATABASE_URL 环境变量")
+	if err != nil {
+		t.Skipf("跳过集成测试：无法连接数据库 (%v)", err)
+	}
 
 	err = pool.Ping(context.Background())
-	require.NoError(t, err, "数据库连接失败")
+	if err != nil {
+		pool.Close()
+		t.Skipf("跳过集成测试：数据库不可用 (%v)", err)
+	}
 
 	// 创建测试表
 	createTable(t, pool)
 
 	return pool
+}
+
+func loadTestDotEnv() error {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return fmt.Errorf("runtime caller failure")
+	}
+	path := filepath.Join(filepath.Dir(file), ".env")
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		if key == "" {
+			continue
+		}
+		if _, exists := os.LookupEnv(key); !exists {
+			_ = os.Setenv(key, val)
+		}
+	}
+	return scanner.Err()
 }
 
 // createTable 创建测试表
