@@ -126,9 +126,9 @@ func TestTxOptions_ZeroValueCheck(t *testing.T) {
 // TestTxOptions_ImmutableAfterCreation 验证选项对象的不可变性
 func TestTxOptions_ImmutableAfterCreation(t *testing.T) {
 	original := txmanager.TxOptions{
-		Isolation:  txmanager.Serializable,
-		Timeout:    5 * time.Second,
-		TraceName:  "original",
+		Isolation: txmanager.Serializable,
+		Timeout:   5 * time.Second,
+		TraceName: "original",
 	}
 
 	// 创建副本
