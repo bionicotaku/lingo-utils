@@ -27,7 +27,7 @@ type OutboxEvent struct {
 	AggregateID      uuid.UUID          `json:"aggregate_id"`
 	EventType        string             `json:"event_type"`
 	Payload          []byte             `json:"payload"`
-	Headers          []byte             `json:"headers"`
+	Headers          string             `json:"headers"`
 	OccurredAt       pgtype.Timestamptz `json:"occurred_at"`
 	AvailableAt      pgtype.Timestamptz `json:"available_at"`
 	PublishedAt      pgtype.Timestamptz `json:"published_at"`

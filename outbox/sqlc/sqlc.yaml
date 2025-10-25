@@ -18,3 +18,5 @@ sql:
               import: github.com/google/uuid
               package: uuid
               type: UUID
+          - db_type: "jsonb"
+            go_type: "string"

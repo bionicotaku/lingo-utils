@@ -7,19 +7,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-func encodeHeaders(attrs map[string]string) ([]byte, error) {
+func encodeHeaders(attrs map[string]string) (string, error) {
 	if attrs == nil {
 		attrs = map[string]string{}
 	}
-	return json.Marshal(attrs)
+	bytes, err := json.Marshal(attrs)
+	if err != nil {
+		return "", err
+	}
+	return string(bytes), nil
 }
 
-func decodeHeaders(value []byte) map[string]string {
+func decodeHeaders(value string) map[string]string {
 	if len(value) == 0 {
 		return map[string]string{}
 	}
 	var attrs map[string]string
-	if err := json.Unmarshal(value, &attrs); err != nil {
+	if err := json.Unmarshal([]byte(value), &attrs); err != nil {
 		return map[string]string{}
 	}
 	return attrs

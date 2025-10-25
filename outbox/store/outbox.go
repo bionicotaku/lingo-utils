@@ -8,6 +8,7 @@ import (
 	"github.com/bionicotaku/lingo-utils/outbox/sqlc"
 	"github.com/bionicotaku/lingo-utils/txmanager"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Message 描述待写入 outbox 的事件。
@@ -51,6 +52,7 @@ func (r *Repository) Enqueue(ctx context.Context, sess txmanager.Session, msg Me
 	if err != nil {
 		return fmt.Errorf("marshal headers: %w", err)
 	}
+	r.log.WithContext(ctx).Errorf("debug outbox headers: %s", headersJSON)
 
 	params := outboxsql.InsertOutboxEventParams{
 		EventID:       msg.EventID,
@@ -64,6 +66,9 @@ func (r *Repository) Enqueue(ctx context.Context, sess txmanager.Session, msg Me
 
 	if _, err := queries.InsertOutboxEvent(ctx, params); err != nil {
 		r.log.WithContext(ctx).Errorf("insert outbox event failed: event_id=%s err=%v", msg.EventID, err)
+		if pgErr, ok := err.(*pgconn.PgError); ok {
+			r.log.WithContext(ctx).Errorw("pg error detail", "event_id", msg.EventID, "pg_message", pgErr.Message, "pg_detail", pgErr.Detail, "pg_hint", pgErr.Hint, "pg_position", pgErr.Position)
+		}
 		return fmt.Errorf("insert outbox event: %w", err)
 	}
 
