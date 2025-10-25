@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/bionicotaku/lingo-utils/outbox/sqlc"
@@ -45,7 +44,8 @@ func (r *Repository) RecordInboxEvent(ctx context.Context, sess txmanager.Sessio
 		Payload:       msg.Payload,
 	}
 	if err := queries.InsertInboxEvent(ctx, params); err != nil {
-		return fmt.Errorf("insert inbox event: %w", err)
+		r.log.WithContext(ctx).Errorw("failed to insert inbox event", "event_id", msg.EventID, "source_service", msg.SourceService, "event_type", msg.EventType, "error", err)
+		return err
 	}
 	return nil
 }
@@ -54,7 +54,8 @@ func (r *Repository) RecordInboxEvent(ctx context.Context, sess txmanager.Sessio
 func (r *Repository) GetInboxEvent(ctx context.Context, sess txmanager.Session, eventID uuid.UUID) (*InboxEvent, error) {
 	rec, err := r.queries(sess).GetInboxEvent(ctx, eventID)
 	if err != nil {
-		return nil, fmt.Errorf("get inbox event: %w", err)
+		r.log.WithContext(ctx).Errorw("failed to get inbox event", "event_id", eventID, "error", err)
+		return nil, err
 	}
 	var processedAt *time.Time
 	if rec.ProcessedAt.Valid {
@@ -87,7 +88,8 @@ func (r *Repository) MarkInboxProcessed(ctx context.Context, sess txmanager.Sess
 		ProcessedAt: timestamptzFromTime(processedAt),
 	}
 	if err := queries.MarkInboxEventProcessed(ctx, params); err != nil {
-		return fmt.Errorf("mark inbox processed: %w", err)
+		r.log.WithContext(ctx).Errorw("failed to mark inbox event as processed", "event_id", eventID, "processed_at", processedAt, "error", err)
+		return err
 	}
 	return nil
 }
@@ -100,7 +102,8 @@ func (r *Repository) RecordInboxError(ctx context.Context, sess txmanager.Sessio
 		LastError: textFromNullableString(errMsg),
 	}
 	if err := queries.RecordInboxEventError(ctx, params); err != nil {
-		return fmt.Errorf("record inbox error: %w", err)
+		r.log.WithContext(ctx).Errorw("failed to record inbox event error", "event_id", eventID, "error_msg", errMsg, "error", err)
+		return err
 	}
 	return nil
 }

@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/bionicotaku/lingo-utils/outbox/sqlc"
@@ -50,9 +49,9 @@ func (r *Repository) Enqueue(ctx context.Context, sess txmanager.Session, msg Me
 
 	headersJSON, err := encodeHeaders(msg.Headers)
 	if err != nil {
-		return fmt.Errorf("marshal headers: %w", err)
+		r.log.WithContext(ctx).Errorw("failed to encode headers", "event_id", msg.EventID, "error", err)
+		return err
 	}
-	r.log.WithContext(ctx).Errorf("debug outbox headers: %s", headersJSON)
 
 	params := outboxsql.InsertOutboxEventParams{
 		EventID:       msg.EventID,
@@ -65,11 +64,11 @@ func (r *Repository) Enqueue(ctx context.Context, sess txmanager.Session, msg Me
 	}
 
 	if _, err := queries.InsertOutboxEvent(ctx, params); err != nil {
-		r.log.WithContext(ctx).Errorf("insert outbox event failed: event_id=%s err=%v", msg.EventID, err)
+		r.log.WithContext(ctx).Errorw("failed to insert outbox event", "event_id", msg.EventID, "error", err)
 		if pgErr, ok := err.(*pgconn.PgError); ok {
-			r.log.WithContext(ctx).Errorw("pg error detail", "event_id", msg.EventID, "pg_message", pgErr.Message, "pg_detail", pgErr.Detail, "pg_hint", pgErr.Hint, "pg_position", pgErr.Position)
+			r.log.WithContext(ctx).Errorw("postgres error detail", "event_id", msg.EventID, "pg_message", pgErr.Message, "pg_detail", pgErr.Detail, "pg_hint", pgErr.Hint, "pg_position", pgErr.Position)
 		}
-		return fmt.Errorf("insert outbox event: %w", err)
+		return err
 	}
 
 	r.log.WithContext(ctx).Debugf("outbox event enqueued: aggregate=%s id=%s", msg.AggregateType, msg.AggregateID)
@@ -86,7 +85,8 @@ func (r *Repository) ClaimPending(ctx context.Context, availableBefore, staleBef
 	}
 	records, err := r.base.ClaimPendingOutboxEvents(ctx, params)
 	if err != nil {
-		return nil, fmt.Errorf("claim outbox events: %w", err)
+		r.log.WithContext(ctx).Errorw("failed to claim pending outbox events", "lock_token", lockToken, "limit", limit, "error", err)
+		return nil, err
 	}
 
 	events := make([]Event, 0, len(records))
@@ -105,7 +105,8 @@ func (r *Repository) MarkPublished(ctx context.Context, sess txmanager.Session, 
 		PublishedAt: timestamptzFromTime(publishedAt),
 	}
 	if err := queries.MarkOutboxEventPublished(ctx, params); err != nil {
-		return fmt.Errorf("mark outbox published: %w", err)
+		r.log.WithContext(ctx).Errorw("failed to mark outbox event as published", "event_id", eventID, "lock_token", lockToken, "error", err)
+		return err
 	}
 	return nil
 }
@@ -120,7 +121,8 @@ func (r *Repository) Reschedule(ctx context.Context, sess txmanager.Session, eve
 		AvailableAt: timestamptzFromTime(nextAvailable),
 	}
 	if err := queries.RescheduleOutboxEvent(ctx, params); err != nil {
-		return fmt.Errorf("reschedule outbox event: %w", err)
+		r.log.WithContext(ctx).Errorw("failed to reschedule outbox event", "event_id", eventID, "lock_token", lockToken, "next_available", nextAvailable, "error", err)
+		return err
 	}
 	return nil
 }
@@ -129,7 +131,8 @@ func (r *Repository) Reschedule(ctx context.Context, sess txmanager.Session, eve
 func (r *Repository) CountPending(ctx context.Context) (int64, error) {
 	count, err := r.base.CountPendingOutboxEvents(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("count pending outbox events: %w", err)
+		r.log.WithContext(ctx).Errorw("failed to count pending outbox events", "error", err)
+		return 0, err
 	}
 	return count, nil
 }
