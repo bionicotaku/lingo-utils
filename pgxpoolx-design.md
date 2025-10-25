@@ -185,8 +185,8 @@ wire.Build(
    - [x] 添加包级 README 脚手架（可复用本文档内容）。
 
 5. **测试与验证**
-   - [ ] 在 `test/` 子目录准备 Testcontainers 或本地 PG 测试脚本。
-   - [ ] 编写单元测试覆盖：成功初始化、DSN 缺失报错、健康检查失败、MetricsEnabled false/true 行为。
+   - [x] 在 `test/` 子目录准备基于 Supabase 的集成测试脚本（依赖 `.env` 中的 `DATABASE_URL`）。
+   - [x] 编写单元/集成测试覆盖配置校验、组件初始化成功/失败、指标开关与指标采集（`config_test.go`、`component_error_test.go`、`component_internal_test.go`、`integration_test.go`）。
    - [ ] 如可能，添加基准测试评估初始化耗时。
 
 6. **模板迁移**

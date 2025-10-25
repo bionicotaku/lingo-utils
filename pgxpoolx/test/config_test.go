@@ -34,3 +34,33 @@ func TestConfigSanitizeMissingDSN(t *testing.T) {
 	_, err := pgxpoolx.Config{}.Sanitize()
 	require.Error(t, err)
 }
+func TestConfigSanitizePreservesCustomSearchPath(t *testing.T) {
+	cfg := pgxpoolx.Config{
+		DSN:        "postgres://user:pass@localhost:5432/db",
+		SearchPath: []string{"tenant", "analytics"},
+	}
+	sanitized, err := cfg.Sanitize()
+	require.NoError(t, err)
+	require.Equal(t, []string{"tenant", "analytics"}, sanitized.SearchPath)
+}
+
+func TestConfigPreparedStatementsEnabled(t *testing.T) {
+	enabled := true
+	metrics := true
+	cfg := pgxpoolx.Config{
+		DSN:                "postgres://user:pass@localhost:5432/db",
+		EnablePreparedStmt: &enabled,
+		MetricsEnabled:     &metrics,
+	}
+	sanitized, err := cfg.Sanitize()
+	require.NoError(t, err)
+	require.True(t, sanitized.PreparedStatementsEnabled())
+	require.True(t, sanitized.MetricsEnabledValue())
+}
+
+func TestConfigSanitizeTrimsDSN(t *testing.T) {
+	cfg := pgxpoolx.Config{DSN: "  postgres://user:pass@localhost:5432/db  "}
+	sanitized, err := cfg.Sanitize()
+	require.NoError(t, err)
+	require.Equal(t, "postgres://user:pass@localhost:5432/db", sanitized.DSN)
+}
