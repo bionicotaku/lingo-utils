@@ -1,0 +1,67 @@
+-- Generated from lingo-utils/outbox/schema/tmpl/outbox_inbox_ddl.sql.tmpl
+-- Schema: {{.Schema}}
+
+CREATE SCHEMA IF NOT EXISTS {{.Schema}};
+
+CREATE TABLE IF NOT EXISTS {{.Schema}}.outbox_events (
+  event_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  aggregate_type TEXT NOT NULL,
+  aggregate_id UUID NOT NULL,
+  event_type TEXT NOT NULL,
+  payload BYTEA NOT NULL,
+  headers JSONB NOT NULL DEFAULT '{}'::jsonb,
+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  available_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  published_at TIMESTAMPTZ,
+  delivery_attempts INTEGER NOT NULL DEFAULT 0 CHECK (delivery_attempts >= 0),
+  last_error TEXT,
+  lock_token TEXT,
+  locked_at TIMESTAMPTZ
+);
+
+COMMENT ON TABLE {{.Schema}}.outbox_events IS 'Outbox 表：与业务事务同库写入，后台扫描发布到事件总线';
+COMMENT ON COLUMN {{.Schema}}.outbox_events.aggregate_type IS '聚合根类型，例如 video';
+COMMENT ON COLUMN {{.Schema}}.outbox_events.aggregate_id IS '聚合根主键，保持与业务表一致的 UUID';
+COMMENT ON COLUMN {{.Schema}}.outbox_events.event_type IS '事件名，使用过去式（如 catalog.video.ready）';
+COMMENT ON COLUMN {{.Schema}}.outbox_events.payload IS '事件负载（Protobuf 二进制），包含业务数据快照';
+COMMENT ON COLUMN {{.Schema}}.outbox_events.headers IS '事件头部（JSON），用于 trace/idempotency 等';
+COMMENT ON COLUMN {{.Schema}}.outbox_events.available_at IS '事件可被 Relay 选择的时间，支持延迟投递';
+COMMENT ON COLUMN {{.Schema}}.outbox_events.published_at IS '事件成功发布到消息通道的时间戳';
+COMMENT ON COLUMN {{.Schema}}.outbox_events.delivery_attempts IS 'Outbox Relay 重试次数的累积值';
+COMMENT ON COLUMN {{.Schema}}.outbox_events.last_error IS '最近一次投递失败/异常的描述';
+COMMENT ON COLUMN {{.Schema}}.outbox_events.lock_token IS '发布器租约标记，标识由哪个实例认领';
+COMMENT ON COLUMN {{.Schema}}.outbox_events.locked_at IS '租约获取时间，防止长期占用';
+
+CREATE INDEX IF NOT EXISTS outbox_events_available_idx
+  ON {{.Schema}}.outbox_events (available_at)
+  WHERE published_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS outbox_events_lock_idx
+  ON {{.Schema}}.outbox_events (lock_token)
+  WHERE lock_token IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS outbox_events_published_idx
+  ON {{.Schema}}.outbox_events (published_at);
+
+CREATE TABLE IF NOT EXISTS {{.Schema}}.inbox_events (
+  event_id UUID PRIMARY KEY,
+  source_service TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  aggregate_type TEXT,
+  aggregate_id TEXT,
+  payload BYTEA NOT NULL,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  processed_at TIMESTAMPTZ,
+  last_error TEXT
+);
+
+COMMENT ON TABLE {{.Schema}}.inbox_events IS 'Inbox 表：记录已消费的外部事件，保障处理幂等性';
+COMMENT ON COLUMN {{.Schema}}.inbox_events.event_id IS '来源事件的唯一标识，保证幂等';
+COMMENT ON COLUMN {{.Schema}}.inbox_events.source_service IS '事件产生的服务上下文';
+COMMENT ON COLUMN {{.Schema}}.inbox_events.aggregate_type IS '来源聚合根类型（可选，便于排查）';
+COMMENT ON COLUMN {{.Schema}}.inbox_events.aggregate_id IS '来源聚合根主键（文本化，兼容多类型）';
+COMMENT ON COLUMN {{.Schema}}.inbox_events.payload IS '保留原始 Protobuf 事件载荷';
+COMMENT ON COLUMN {{.Schema}}.inbox_events.processed_at IS '事件处理完成时间，NULL 表示仍待处理';
+
+CREATE INDEX IF NOT EXISTS inbox_events_processed_idx
+  ON {{.Schema}}.inbox_events (processed_at);
