@@ -136,11 +136,11 @@ lingo-utils/outbox/
 
 ## 7. TODO（落地 checklist）
 
-1. [ ] 在 `lingo-utils/outbox` 创建目录与基础 go.mod 调整。
-2. [ ] 编写 DDL 模板、schema 模板，并提供渲染工具（Go program 或 Make target）。
-3. [ ] 拆出共享 sqlc 查询，生成公用 repository。
-4. [ ] 移植 PublisherTask 到公共包，抽象接口/配置。
-5. [ ] 定义 Inbox Worker 骨架，实现幂等写入与错误记录。
+1. [x] 在 `lingo-utils/outbox` 创建目录与基础 go.mod 调整。
+2. [x] 编写 DDL 模板、schema 模板，并提供渲染工具（Go program 或 Make target）。
+3. [x] 拆出共享 sqlc 查询，生成公用 repository。
+4. [x] 移植 PublisherTask 到公共包，抽象接口/配置。
+5. [x] 定义 Inbox Worker 骨架，实现幂等写入与错误记录。
 6. [ ] 整理 config loader + validation。
 7. [ ] 编写共享集成测试工具。
 8. [ ] 更新 catalog 服务使用共享模块，验证 E2E。
