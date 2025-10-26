@@ -7,11 +7,16 @@
 ```
 outbox/
 ├── README.md
-├── cmd/render-sql/            # 生成工具（Go 程序）
+├── cmd/render-sql/            # 迁移/SQLC 模板渲染 CLI
+├── config/                    # 强类型配置定义与校验
+├── inbox/                     # StreamingPull Runner + Handler 接口
+├── publisher/                 # Outbox 发布 Runner
 ├── schema/
 │   └── tmpl/
 │       ├── outbox_inbox_ddl.sql.tmpl        # 迁移脚本模板
 │       └── outbox_inbox_sqlc_schema.sql.tmpl# sqlc schema 模板
+├── store/                     # 通用仓储（Outbox/Inbox）
+└── repository.go              # 面向服务的仓储构造辅助
 ```
 
 ## 快速开始
@@ -45,11 +50,46 @@ outbox/
 - 模板包含 `CREATE SCHEMA IF NOT EXISTS`，可安全用于首次初始化。
 - sqlc 模板与 DDL 完全同步，确保生成的 Go 代码字段类型一致。
 
+## 运行时代码复用
+
+除了迁移模板，本目录还提供运行时封装，帮助服务端仅通过少量代码完成 Outbox/Inbox 集成：
+
+- `config.Config`：聚合 schema、发布器与消费者配置，带 Normalize/Validate。
+- `outbox.NewRepository`：基于 pgxpool 和 schema 构造共享仓储，自动校验 `search_path`。
+- `publisher.Runner`：封装 Outbox 扫描、租约、退避与指标；调用 `Run(ctx)` 即可常驻。
+- `inbox.Runner[T]`：泛型 StreamingPull 消费者，组合自定义 Decoder/Handler 即可落地投影。
+
+### 最小示例
+
+```go
+repo, _ := outbox.NewRepository(pool, logger, outbox.RepositoryOptions{Schema: "catalog"})
+runner, _ := publisher.NewRunner(publisher.RunnerParams{
+    Store:     repo,
+    Publisher: pub,
+    Config:    cfg.Publisher,
+    Logger:    logger,
+})
+go runner.Run(ctx)
+
+consumer, _ := inbox.NewRunner(inbox.RunnerParams[v1.Event]{
+    Store:      repo,
+    Subscriber: sub,
+    TxManager:  tx,
+    Decoder:    dec,
+    Handler:    handler,
+    Config:     cfg.Inbox,
+    Logger:     logger,
+})
+go consumer.Run(ctx)
+```
+
+> ⚠️ 建议在仓储与 Runner 创建前调用 `cfg := cfg.Normalize(); cfg.Validate()`，确保所有字段满足约束。
+
 ## 集成建议
 
 - 在服务的 Makefile 或脚本中添加步骤，在 sqlc/迁移生成前调用 `render-sql`，保证任何 schema 变更都从模板统一下发。
 - 若某个服务需要扩充额外字段，可在渲染后追加，但请同步回 `tmpl` 以便共享。
-- 配合未来计划的仓储/任务抽象（待落地），可以实现 Outbox/Inbox 全栈复用。
+- 结合本文的 Runner 封装，可实现 Outbox/Inbox 从迁移到运行态的全栈复用。
 
 ## 后续计划
 
