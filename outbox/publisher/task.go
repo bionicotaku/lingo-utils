@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
-    "github.com/bionicotaku/lingo-utils/gcpubsub"
-    "github.com/bionicotaku/lingo-utils/outbox/store"
+	"github.com/bionicotaku/lingo-utils/gcpubsub"
+	"github.com/bionicotaku/lingo-utils/outbox/store"
 	"github.com/go-kratos/kratos/v2/log"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
@@ -47,7 +47,7 @@ type Publisher = gcpubsub.Publisher
 
 // Task 负责扫描 Outbox 并将事件发布出去。
 type Task struct {
-    repo           *store.Repository
+	repo           *store.Repository
 	publisher      Publisher
 	cfg            Config
 	clock          func() time.Time
@@ -261,10 +261,10 @@ func (t *Task) publishOnce(ctx context.Context, event store.Event) error {
 	latency := t.clock().Sub(start)
 
 	if err != nil {
-		if t.metricsEnabled && t.metrics != nil {
-			t.metrics.recordFailure(ctx, event, latency)
-		}
 		lag := t.clock().Sub(event.OccurredAt)
+		if t.metricsEnabled && t.metrics != nil {
+			t.metrics.recordFailure(ctx, event, latency, lag)
+		}
 		t.log.WithContext(ctx).Warnw(
 			"msg", "outbox publish failed",
 			"event_id", event.EventID,
@@ -279,8 +279,9 @@ func (t *Task) publishOnce(ctx context.Context, event store.Event) error {
 
 	publishedAt := t.clock()
 	if err := t.repo.MarkPublished(ctx, nil, event.EventID, t.lockToken, publishedAt); err != nil {
+		lag := t.clock().Sub(event.OccurredAt)
 		if t.metricsEnabled && t.metrics != nil {
-			t.metrics.recordFailure(ctx, event, latency)
+			t.metrics.recordFailure(ctx, event, latency, lag)
 		}
 		t.log.WithContext(ctx).Errorw(
 			"msg", "outbox mark published failed",
@@ -292,7 +293,8 @@ func (t *Task) publishOnce(ctx context.Context, event store.Event) error {
 		return err
 	}
 	if t.metricsEnabled && t.metrics != nil {
-		t.metrics.recordSuccess(ctx, event, latency)
+		lag := publishedAt.Sub(event.OccurredAt)
+		t.metrics.recordSuccess(ctx, event, latency, lag)
 	}
 	lag := publishedAt.Sub(event.OccurredAt)
 	t.log.WithContext(ctx).Infow(
@@ -313,6 +315,9 @@ func (t *Task) handleFailure(ctx context.Context, event store.Event, publishErr 
 	lastErr := publishErr.Error()
 	if err := t.repo.Reschedule(ctx, nil, event.EventID, t.lockToken, next, lastErr); err != nil {
 		return err
+	}
+	if t.metricsEnabled && t.metrics != nil {
+		t.metrics.recordRetry(ctx, event)
 	}
 
 	if t.cfg.MaxAttempts > 0 && int(event.DeliveryAttempts)+1 >= t.cfg.MaxAttempts {
@@ -394,7 +399,9 @@ func boolPtr(v bool) *bool {
 type publisherMetrics struct {
 	success      metric.Int64Counter
 	failure      metric.Int64Counter
+	retry        metric.Int64Counter
 	latency      metric.Float64Histogram
+	lag          metric.Float64Histogram
 	backlogGauge metric.Int64ObservableGauge
 	registration metric.Registration
 	backlog      atomic.Int64
@@ -406,6 +413,8 @@ const (
 	metricNamePublishSuccess = "outbox_publish_success_total"
 	metricNamePublishFailure = "outbox_publish_failure_total"
 	metricNamePublishLatency = "outbox_publish_latency_ms"
+	metricNamePublishLag     = "outbox_publish_lag_ms"
+	metricNamePublishRetry   = "outbox_publish_retry_total"
 	metricNameBacklogGauge   = "outbox_backlog"
 )
 
@@ -437,10 +446,22 @@ func newPublisherMetrics(meter metric.Meter, helper *log.Helper) *publisherMetri
 		helper.Warnw("msg", "outbox metrics register failure counter", "err", err)
 	}
 
+	m.retry, err = meter.Int64Counter(metricNamePublishRetry,
+		metric.WithDescription("Number of outbox publish attempts rescheduled for retry"))
+	if err != nil {
+		helper.Warnw("msg", "outbox metrics register retry counter", "err", err)
+	}
+
 	m.latency, err = meter.Float64Histogram(metricNamePublishLatency,
 		metric.WithDescription("Latency for publishing outbox events"), metric.WithUnit("ms"))
 	if err != nil {
 		helper.Warnw("msg", "outbox metrics register latency histogram", "err", err)
+	}
+
+	m.lag, err = meter.Float64Histogram(metricNamePublishLag,
+		metric.WithDescription("Lag between event occurrence and publish completion"), metric.WithUnit("ms"))
+	if err != nil {
+		helper.Warnw("msg", "outbox metrics register lag histogram", "err", err)
 	}
 
 	m.backlogGauge, err = meter.Int64ObservableGauge(metricNameBacklogGauge,
@@ -463,7 +484,7 @@ func newPublisherMetrics(meter metric.Meter, helper *log.Helper) *publisherMetri
 	return m
 }
 
-func (m *publisherMetrics) recordSuccess(ctx context.Context, event store.Event, latency time.Duration) {
+func (m *publisherMetrics) recordSuccess(ctx context.Context, event store.Event, latency, lag time.Duration) {
 	if m == nil || !m.enabled {
 		return
 	}
@@ -478,9 +499,13 @@ func (m *publisherMetrics) recordSuccess(ctx context.Context, event store.Event,
 		latencyAttrs := append(attrs, attrResult.String("success"))
 		m.latency.Record(ctx, float64(latency.Milliseconds()), metric.WithAttributes(latencyAttrs...))
 	}
+	if m.lag != nil && lag >= 0 {
+		lagAttrs := append(attrs, attrResult.String("success"))
+		m.lag.Record(ctx, float64(lag.Milliseconds()), metric.WithAttributes(lagAttrs...))
+	}
 }
 
-func (m *publisherMetrics) recordFailure(ctx context.Context, event store.Event, latency time.Duration) {
+func (m *publisherMetrics) recordFailure(ctx context.Context, event store.Event, latency, lag time.Duration) {
 	if m == nil || !m.enabled {
 		return
 	}
@@ -495,6 +520,21 @@ func (m *publisherMetrics) recordFailure(ctx context.Context, event store.Event,
 		latencyAttrs := append(attrs, attrResult.String("failure"))
 		m.latency.Record(ctx, float64(latency.Milliseconds()), metric.WithAttributes(latencyAttrs...))
 	}
+	if m.lag != nil && lag >= 0 {
+		lagAttrs := append(attrs, attrResult.String("failure"))
+		m.lag.Record(ctx, float64(lag.Milliseconds()), metric.WithAttributes(lagAttrs...))
+	}
+}
+
+func (m *publisherMetrics) recordRetry(ctx context.Context, event store.Event) {
+	if m == nil || !m.enabled || m.retry == nil {
+		return
+	}
+	attrs := []attribute.KeyValue{
+		attrAggregateType.String(event.AggregateType),
+		attrEventType.String(event.EventType),
+	}
+	m.retry.Add(ctx, 1, metric.WithAttributes(attrs...))
 }
 
 func (m *publisherMetrics) setBacklog(count int64) {

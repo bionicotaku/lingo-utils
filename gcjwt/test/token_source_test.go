@@ -14,7 +14,6 @@ import (
 )
 
 func TestTokenSource_Success(t *testing.T) {
-	t.Parallel()
 
 	const accessToken = "fake-token"
 	var calls atomic.Int32
@@ -39,7 +38,6 @@ func TestTokenSource_Success(t *testing.T) {
 }
 
 func TestTokenSource_InitError(t *testing.T) {
-	t.Parallel()
 
 	gcjwt.SetTokenSourceFactory(func(ctx context.Context, audience string) (oauth2.TokenSource, error) {
 		return nil, errors.New("metadata unreachable")

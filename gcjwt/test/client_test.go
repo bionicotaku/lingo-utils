@@ -14,7 +14,6 @@ import (
 )
 
 func TestClientMiddlewareInjectsToken(t *testing.T) {
-	t.Parallel()
 
 	const expectedToken = "injected-token"
 	gcjwt.SetTokenSourceFactory(func(ctx context.Context, audience string) (oauth2.TokenSource, error) {
@@ -45,7 +44,6 @@ func TestClientMiddlewareInjectsToken(t *testing.T) {
 }
 
 func TestClientMiddlewareDisabled(t *testing.T) {
-	t.Parallel()
 
 	header := newMockHeader()
 	tr := &mockClientTransport{header: header}
@@ -66,7 +64,6 @@ func TestClientMiddlewareDisabled(t *testing.T) {
 }
 
 func TestClientMiddlewareTransportMissing(t *testing.T) {
-	t.Parallel()
 
 	gcjwt.SetTokenSourceFactory(func(ctx context.Context, audience string) (oauth2.TokenSource, error) {
 		return oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "token"}), nil
@@ -86,7 +83,6 @@ func TestClientMiddlewareTransportMissing(t *testing.T) {
 }
 
 func TestClientMiddlewareTokenError(t *testing.T) {
-	t.Parallel()
 
 	errSentinel := errors.New("boom")
 	gcjwt.SetTokenSourceFactory(func(ctx context.Context, audience string) (oauth2.TokenSource, error) {
